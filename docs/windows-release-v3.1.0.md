@@ -18,8 +18,9 @@ adapted to native Windows behavior.
   optional review companions, preferences, and the ready queue. Existing
   configured users skip automatic setup. Replaying setup preserves saved
   settings and refuses to discard an open Settings editor.
-- **Run Setup:** accent-colored queue-footer button and tray menu entry, available
-  even before the first queue loads.
+- **Run Setup:** right-aligned accent-colored queue-footer button and tray menu
+  entry, available even before the first queue loads. The compact footer keeps
+  the update age on the left without an extra tray-help paragraph.
 
 Cache restoration and change detection add no authentication requests, Azure
 DevOps calls, or polling timers. Explicit setup checks use an isolated instance

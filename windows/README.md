@@ -64,9 +64,10 @@ are optional and Scout remains unavailable.
 
 Closing setup preserves non-secret choices and progress, but clears an unsaved
 PAT and connection verification. Resume requires a fresh check. Existing
-configured users skip automatic setup. **Run Setup** in the queue footer or tray
+configured users skip automatic setup. **Run Setup** on the right of the queue footer or in the tray
 replays it; **Keep existing settings** discards the draft without changing saved
 preferences. Save/close any Settings editor before replaying setup.
+The compact footer shows the update age on the left without a tray-help paragraph.
 
 ## Configure Azure DevOps
 

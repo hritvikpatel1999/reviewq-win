@@ -280,7 +280,23 @@ public sealed class PlatformAndControllerTests : IDisposable
                 Assert.False(logs.Verbose);
                 var buttons = Descendants(queue).OfType<System.Windows.Controls.Button>().ToArray();
                 var refresh = Assert.Single(buttons, button => Equals(button.Content, "_Refresh"));
-                Assert.Contains(buttons, button => Equals(button.Content, "Run Setup"));
+                var setupButton = Assert.Single(buttons, button => Equals(button.Content, "Run Setup"));
+                var footer = Assert.IsType<System.Windows.Controls.Grid>(setupButton.Parent);
+                var updatedText = Assert.IsType<System.Windows.Controls.TextBlock>(queue.FindName("UpdatedText"));
+                foreach (var width in new[] { queue.MinWidth, 560, 900 })
+                {
+                    queue.Width = width;
+                    queue.UpdateLayout();
+                    var setupLeft = setupButton.TranslatePoint(new System.Windows.Point(), footer).X;
+                    Assert.Equal(footer.ActualWidth - setupButton.Margin.Right,
+                        setupLeft + setupButton.ActualWidth, precision: 1);
+                    Assert.True(updatedText.ActualWidth + updatedText.Margin.Right <= setupLeft,
+                        "The update age must not overlap the right-aligned setup button.");
+                }
+                queue.Width = 560;
+                queue.UpdateLayout();
+                Assert.DoesNotContain(Descendants(queue).OfType<System.Windows.Controls.TextBlock>(),
+                    text => text.Text.StartsWith("Closing this window", StringComparison.Ordinal));
                 Assert.Contains(Descendants(queue).OfType<System.Windows.Controls.TextBlock>(),
                     text => text.Text.StartsWith("Updated ", StringComparison.Ordinal));
                 var settingsButton = Assert.Single(buttons, button => Equals(button.Content, "_Settings"));
