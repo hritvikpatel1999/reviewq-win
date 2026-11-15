@@ -228,6 +228,7 @@ public sealed class PlatformAndControllerTests : IDisposable
                         {
                             Number = number, Title = $"Review {kind} {number}", Author = "Author", Organization = "org",
                             Project = "project", Repository = number == 2 ? "another" : "repository",
+                            RepositoryId = $"{kind}-{number}",
                             Queue = kind, CreatedAt = DateTimeOffset.UtcNow
                         })).ToArray()))
                 }, _ => { });
@@ -246,6 +247,25 @@ public sealed class PlatformAndControllerTests : IDisposable
 #pragma warning restore WPF0001
                 Assert.True(settings.IsLoaded);
                 Assert.True(diagnostics.IsLoaded);
+                using var setupSession = new SetupSession(Settings, new SetupProgressStore(Path.Combine(directory, "Setup")),
+                    (_, _, _) => Task.FromResult(new ReviewSnapshot([])), (_, _, _) => Task.CompletedTask, _ => { });
+                setupSession.Begin(Settings);
+                var setupWindow = new SetupWindow(app, setupSession, true);
+                setupWindow.Show();
+#pragma warning disable WPF0001
+                Assert.Equal(System.Windows.ThemeMode.System, setupWindow.ThemeMode);
+#pragma warning restore WPF0001
+                Assert.True(setupWindow.IsLoaded);
+                for (var step = 0; step < 6; step++)
+                {
+                    Assert.Contains(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                        text => text.Text == $"Step {step + 1} of 6");
+                    if (setupSession.Step == SetupStep.Authentication) setupSession.TestAsync().GetAwaiter().GetResult();
+                    setupSession.AdvanceAsync().GetAwaiter().GetResult();
+                }
+                setupWindow.Close();
+                Assert.Equal("", setupSession.Token);
+                Assert.False(setupSession.HasVerifiedQueue);
                 var diagnosticElements = Descendants(diagnostics).ToArray();
                 var diagnosticButtons = diagnosticElements.OfType<System.Windows.Controls.Button>()
                     .Select(System.Windows.Automation.AutomationProperties.GetName).ToArray();
@@ -260,6 +280,25 @@ public sealed class PlatformAndControllerTests : IDisposable
                 Assert.False(logs.Verbose);
                 var buttons = Descendants(queue).OfType<System.Windows.Controls.Button>().ToArray();
                 var refresh = Assert.Single(buttons, button => Equals(button.Content, "_Refresh"));
+                var setupButton = Assert.Single(buttons, button => Equals(button.Content, "Run Setup"));
+                var footer = Assert.IsType<System.Windows.Controls.Grid>(setupButton.Parent);
+                var updatedText = Assert.IsType<System.Windows.Controls.TextBlock>(queue.FindName("UpdatedText"));
+                foreach (var width in new[] { queue.MinWidth, 560, 900 })
+                {
+                    queue.Width = width;
+                    queue.UpdateLayout();
+                    var setupLeft = setupButton.TranslatePoint(new System.Windows.Point(), footer).X;
+                    Assert.Equal(footer.ActualWidth - setupButton.Margin.Right,
+                        setupLeft + setupButton.ActualWidth, precision: 1);
+                    Assert.True(updatedText.ActualWidth + updatedText.Margin.Right <= setupLeft,
+                        "The update age must not overlap the right-aligned setup button.");
+                }
+                queue.Width = 560;
+                queue.UpdateLayout();
+                Assert.DoesNotContain(Descendants(queue).OfType<System.Windows.Controls.TextBlock>(),
+                    text => text.Text.StartsWith("Closing this window", StringComparison.Ordinal));
+                Assert.Contains(Descendants(queue).OfType<System.Windows.Controls.TextBlock>(),
+                    text => text.Text.StartsWith("Updated ", StringComparison.Ordinal));
                 var settingsButton = Assert.Single(buttons, button => Equals(button.Content, "_Settings"));
                 var refreshRight = refresh.TranslatePoint(new System.Windows.Point(refresh.ActualWidth, 0), queue).X;
                 var settingsLeft = settingsButton.TranslatePoint(new System.Windows.Point(0, 0), queue).X;
@@ -309,6 +348,14 @@ public sealed class PlatformAndControllerTests : IDisposable
                 repositories[0].IsExpanded = false;
                 controller.RefreshAsync().GetAwaiter().GetResult();
                 queue.UpdateLayout();
+                Assert.Null(controller.Error);
+                Assert.True(controller.Changes.HasChanges);
+                Assert.Contains(Descendants(queue).OfType<System.Windows.FrameworkElement>(), element =>
+                    System.Windows.Automation.AutomationProperties.GetName(element) ==
+                    "Pull request is new or changed since the previous successful refresh");
+                Assert.Contains(Descendants(queue).OfType<System.Windows.FrameworkElement>(), element =>
+                    System.Windows.Automation.AutomationProperties.GetName(element) ==
+                    "Section changed since the previous successful refresh");
                 var refreshedRepositories = Descendants(queue).OfType<System.Windows.Controls.Expander>()
                     .Where(group => System.Windows.Automation.AutomationProperties.GetName(group) == "org/project/repository").ToArray();
                 Assert.False(refreshedRepositories[0].IsExpanded);

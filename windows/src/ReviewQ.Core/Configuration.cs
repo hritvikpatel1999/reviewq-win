@@ -22,6 +22,7 @@ public sealed record ReviewSettings
     public bool StartAtLogin { get; set; }
     public string GlobalShortcut { get; set; } = "Ctrl+Alt+Q";
     public bool FirstCloseShown { get; set; }
+    public bool SetupCompleted { get; set; }
     public bool HasSources => !string.IsNullOrWhiteSpace(SourceUrls);
     public IReadOnlyList<ReviewSource> Sources()
     {

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('win-x86', 'win-x64', 'win-arm64')][string[]]$Runtime = @('win-x86', 'win-x64', 'win-arm64'),
-    [string]$Version = '3.0.0',
+    [string]$Version = '3.1.0',
     [switch]$SkipTests,
     [switch]$SkipInstaller,
     [string]$InstallerCompiler

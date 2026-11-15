@@ -24,6 +24,7 @@ public partial class App : Application
     private HttpClient? http;
     private Forms.NotifyIcon? tray;
     private Icon? trayIcon;
+    private Icon? changedTrayIcon;
     private ShellIntegration? shell;
     private SettingsStore? settingsStore;
     private PrivateDiagnostics? diagnostics;
@@ -31,6 +32,8 @@ public partial class App : Application
     private MainWindow? queue;
     private SettingsWindow? settingsWindow;
     private DiagnosticsWindow? diagnosticsWindow;
+    private SetupSession? setup;
+    private SetupWindow? setupWindow;
     private bool launching;
     public bool IsQuitting { get; private set; }
     public CancellationToken Lifetime => lifetime.Token;
@@ -80,16 +83,28 @@ public partial class App : Application
             authorization = new(PatStore);
             http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
                 { Timeout = TimeSpan.FromSeconds(30) };
-            Controller = new(settings, new AzureDevOpsClient(http, authorization, Path.Combine(directory, "identity-cache.json"), diagnostics.Write), diagnostics.Write);
+            Controller = new(settings, new AzureDevOpsClient(http, authorization, Path.Combine(directory, "identity-cache.json"), diagnostics.Write),
+                diagnostics.Write, new ReviewQueueCache(Path.Combine(directory, "queue-cache.json")));
+            setup = new(settings, new SetupProgressStore(directory),
+                async (draft, pat, ct) =>
+                {
+                    var setupAuthorization = new WindowsAuthorization(new SetupPatStore(pat, PatStore));
+                    var loader = new AzureDevOpsClient(http, setupAuthorization, Path.Combine(directory, "setup-identity-cache.json"), diagnostics.Write);
+                    return await loader.LoadAsync(draft, ct);
+                },
+                (draft, pat, snapshot) => SaveSettingsAsync(draft with { SetupCompleted = true }, pat, snapshot),
+                diagnostics.Write);
             queue = new MainWindow(this, Controller);
             MainWindow = queue;
             var iconPath = Path.Combine(AppContext.BaseDirectory, "ReviewQ.ico");
             trayIcon = File.Exists(iconPath) ? new Icon(iconPath) : (Icon)SystemIcons.Application.Clone();
+            changedTrayIcon = CreateChangedTrayIcon(trayIcon);
             tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "ReviewQ", Visible = true };
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Show ReviewQ", null, (_, _) => ShowQueue());
             menu.Items.Add("Refresh", null, async (_, _) => await Controller.RefreshAsync());
             menu.Items.Add("Settings", null, (_, _) => ShowSettings());
+            menu.Items.Add("Run Setup", null, (_, _) => ShowSetup());
             menu.Items.Add("Diagnostics", null, (_, _) => ShowDiagnostics());
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("Quit ReviewQ", null, (_, _) => Quit());
@@ -103,13 +118,14 @@ public partial class App : Application
             SystemEvents.PowerModeChanged += PowerChanged;
             if (loadError is not null) Controller.Report(loadError);
             if (!e.Args.Contains("--startup") || !settings.HasSources || loadError is not null) ShowQueue();
-            if (!settings.HasSources) ShowSettings();
+            if (loadError is null && (setup.IsActive || (!settings.HasSources && !settings.SetupCompleted))) ShowSetup();
+            else if (!settings.HasSources) ShowSettings();
             if (e.Args.Contains("--diagnostics")) ShowDiagnostics();
             Controller.Start();
             if (smokeTest)
             {
                 await Task.Delay(1500, Lifetime);
-                Quit(queue.IsLoaded && queue.IsVisible && tray.Visible && settingsWindow?.IsLoaded == true ? 0 : 1);
+                Quit(queue.IsLoaded && queue.IsVisible && tray.Visible && setupWindow?.IsLoaded == true ? 0 : 1);
             }
         }
         catch (Exception ex) when (UiErrors.IsExpected(ex) || ex is TimeoutException)
@@ -164,6 +180,7 @@ public partial class App : Application
     public void ShowSettings()
     {
         if (queue is null) return;
+        if (setupWindow is not null) { setupWindow.Activate(); return; }
         if (settingsWindow is null)
         {
             settingsWindow = new(this, Controller.Settings) { Owner = queue };
@@ -171,6 +188,22 @@ public partial class App : Application
         }
         ShowQueue();
         settingsWindow.Show(); settingsWindow.Activate();
+    }
+    public void ShowSetup()
+    {
+        if (queue is null || setup is null) return;
+        if (settingsWindow is not null)
+        {
+            Controller.Report("Close or save the open Settings editor before running setup. Your unsaved edits have not been discarded.");
+            ShowQueue(); settingsWindow.Activate(); return;
+        }
+        if (setupWindow is null)
+        {
+            setup.Begin(Controller.Settings);
+            setupWindow = new(this, setup, Controller.Settings.HasSources) { Owner = queue };
+            setupWindow.Closed += (_, _) => setupWindow = null;
+        }
+        ShowQueue(); setupWindow.Show(); setupWindow.Activate();
     }
     public void ShowDiagnostics()
     {
@@ -183,8 +216,15 @@ public partial class App : Application
         ShowQueue(); diagnosticsWindow.Show(); diagnosticsWindow.Activate();
     }
     public void RegisterShortcut(string text) => shell?.Register(text);
-    public void InvalidateAuthentication() => authorization?.Invalidate();
-    public async Task SaveSettingsAsync(ReviewSettings settings, string newPat)
+    public async Task RemoveSavedPatAsync()
+    {
+        Controller.ClearStartupCache();
+        PatStore.Remove();
+        authorization?.Invalidate();
+        if (Controller.Settings.Authentication == AuthenticationMethod.PersonalAccessToken)
+            await Controller.ApplyAsync(Controller.Settings);
+    }
+    public async Task SaveSettingsAsync(ReviewSettings settings, string newPat, ReviewSnapshot? verifiedSnapshot = null)
     {
         settings.Validate();
         _ = ShellIntegration.Parse(settings.GlobalShortcut);
@@ -193,6 +233,7 @@ public partial class App : Application
             throw new ReviewException("Save a Code (Read) PAT before choosing PAT authentication.");
         var previous = Controller.Settings;
         var previousPat = newPat.Length > 0 ? PatStore.Load() : null;
+        Controller.ClearStartupCache();
         try
         {
             RegisterShortcut(settings.GlobalShortcut);
@@ -217,7 +258,7 @@ public partial class App : Application
             throw;
         }
         authorization!.Invalidate();
-        await Controller.ApplyAsync(settings);
+        await Controller.ApplyAsync(settings, verifiedSnapshot: verifiedSnapshot);
         try { diagnostics!.Write(new("settingsSaved", "settings")); }
         catch (Exception ex) when (UiErrors.IsExpected(ex)) { Controller.Report("Settings were saved, but diagnostic logging failed. " + UiErrors.Message(ex)); }
     }
@@ -254,34 +295,63 @@ public partial class App : Application
         if (tray is null || queue is null) return;
         var text = Controller.Error is not null ? "ReviewQ - error; open queue" : Controller.Snapshot is { } snapshot ?
             $"ReviewQ - {snapshot.PendingCount} pending reviews" : "ReviewQ - waiting for refresh";
+        if (Controller.Changes.HasChanges && Controller.Error is null) text += " - changed since refresh";
         tray.Text = text[..Math.Min(text.Length, 63)];
+        tray.Icon = Controller.Changes.HasChanges ? changedTrayIcon : trayIcon;
         queue.TaskbarItemInfo ??= new TaskbarItemInfo();
         queue.TaskbarItemInfo.ProgressState = Controller.Error is not null ? TaskbarItemProgressState.Error :
             Controller.IsRefreshing ? TaskbarItemProgressState.Indeterminate : TaskbarItemProgressState.None;
         queue.TaskbarItemInfo.ProgressValue = Controller.Error is not null ? 1 : 0;
         var count = Controller.Snapshot?.PendingCount ?? 0;
         var label = Controller.Error is not null ? "!" : count > 99 ? "99+" : count.ToString(CultureInfo.InvariantCulture);
-        if (!Controller.Settings.ShowCount && Controller.Error is null) { queue.TaskbarItemInfo.Overlay = null; return; }
+        if (!Controller.Settings.ShowCount && Controller.Error is null && !Controller.Changes.HasChanges)
+        { queue.TaskbarItemInfo.Overlay = null; return; }
         var visual = new DrawingVisual();
         using (var context = visual.RenderOpen())
         {
-            context.DrawEllipse(System.Windows.Media.Brushes.DarkBlue, null, new System.Windows.Point(12, 12), 12, 12);
-            var textImage = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"), label.Length > 2 ? 10 : 14, System.Windows.Media.Brushes.White, 1);
-            context.DrawText(textImage, new System.Windows.Point((24 - textImage.Width) / 2, (24 - textImage.Height) / 2));
+            if (Controller.Settings.ShowCount || Controller.Error is not null)
+            {
+                context.DrawEllipse(System.Windows.Media.Brushes.DarkBlue, null, new System.Windows.Point(12, 12), 12, 12);
+                var textImage = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    new Typeface("Segoe UI"), label.Length > 2 ? 10 : 14, System.Windows.Media.Brushes.White, 1);
+                context.DrawText(textImage, new System.Windows.Point((24 - textImage.Width) / 2, (24 - textImage.Height) / 2));
+            }
+            if (Controller.Changes.HasChanges)
+                context.DrawEllipse(System.Windows.Media.Brushes.SeaGreen, new System.Windows.Media.Pen(System.Windows.Media.Brushes.White, 1),
+                    new System.Windows.Point(19, 19), 4, 4);
         }
         var image = new System.Windows.Media.Imaging.RenderTargetBitmap(24, 24, 96, 96, PixelFormats.Pbgra32);
         image.Render(visual); image.Freeze();
         queue.TaskbarItemInfo.Overlay = image;
+    }
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr handle);
+    private static Icon CreateChangedTrayIcon(Icon original)
+    {
+        using var bitmap = original.ToBitmap();
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var size = Math.Max(6, bitmap.Width / 3);
+            graphics.FillEllipse(System.Drawing.Brushes.SeaGreen, bitmap.Width - size - 1, bitmap.Height - size - 1, size, size);
+            graphics.DrawEllipse(System.Drawing.Pens.White, bitmap.Width - size - 1, bitmap.Height - size - 1, size, size);
+        }
+        var handle = bitmap.GetHicon();
+        try { using var icon = Icon.FromHandle(handle); return (Icon)icon.Clone(); }
+        finally { DestroyIcon(handle); }
     }
     public void Quit(int exitCode = 0)
     {
         IsQuitting = true;
         lifetime.Cancel();
         Controller?.Dispose();
+        if (setup?.IsActive == true) setup.Pause();
+        setup?.Dispose(); setup = null;
         shell?.Dispose(); shell = null;
         if (tray is not null) { tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); tray = null; }
         trayIcon?.Dispose(); trayIcon = null;
+        changedTrayIcon?.Dispose(); changedTrayIcon = null;
         SystemEvents.PowerModeChanged -= PowerChanged;
         Shutdown(exitCode);
     }

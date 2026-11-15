@@ -13,15 +13,15 @@ the Windows build. See [original project documentation](README.macos.md).
 ## Download and install
 
 Get packages from [Releases](https://github.com/hritvikpatel1999/reviewq-win/releases).
-This repository is private; downloads require repository access.
+This repository and its published releases are public.
 
 Requires **Windows 11 22H2 or newer**. Choose the appropriate architecture:
 
 | Package | Recommended use |
 |---|---|
-| `ReviewQ-3.0.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
-| `ReviewQ-3.0.0-win-arm64-setup.exe` | Windows on ARM |
-| `ReviewQ-3.0.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
+| `ReviewQ-3.1.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
+| `ReviewQ-3.1.0-win-arm64-setup.exe` | Windows on ARM |
+| `ReviewQ-3.1.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
 
 Matching portable ZIPs are also provided. Extract the **entire ZIP** before
 opening `ReviewQ.exe`; no separate .NET runtime is required.
@@ -48,6 +48,12 @@ edition; the x86 package is a compatibility build, not support for legacy Window
   optional sign-in startup, and a configurable **Ctrl+Alt+Q** shortcut.
 - Local private diagnostics with log export, folder access, storage usage, and
   confirmed log clearing.
+- Account/configuration-scoped startup queue cache while fresh data loads, with
+  the original update age always visible.
+- Green tray, section, and PR dots for changes since the previous successful
+  refresh (not unread state).
+- Six-screen resumable setup with explicit read-only connection verification.
+  Use **Run Setup** in the queue footer or tray menu to replay it.
 
 ReviewQ **reads** Azure DevOps. It does not vote, comment, merge, or modify PRs.
 GitHub PR integration is not included. Scout remains disabled because a reliable
@@ -55,14 +61,21 @@ Windows integration has not been verified.
 
 ## First launch
 
-1. Open **Settings** and enter one Azure DevOps organization/project URL per line.
+1. The first launch opens native setup. Enter one Azure DevOps
+   organization/project URL per line.
 2. Choose Azure CLI or PAT authentication:
    - Azure CLI: install it separately, run `az login --allow-no-subscriptions`,
      and complete sign-in. Configure the Entra tenant if needed.
    - PAT: supply a token with **Code (Read)** permissions and sufficient project
      and identity access. It is not stored in settings or diagnostic logs.
-3. Choose optional queues, followed-author emails, drafts, and refresh interval.
-4. Choose **Save and Refresh**.
+3. **Test connection**, then choose optional companions, queues, followed-author
+   emails, drafts, and refresh interval.
+4. Continue to the verified queue, then choose **Open my queue** to save.
+
+Closing setup preserves non-secret draft preferences and progress, not an unsaved
+PAT or connection verification. Existing configured users are not automatically
+sent through setup. Replaying setup refuses to discard an open Settings editor,
+and **Keep existing settings** leaves saved preferences unchanged.
 
 Organizational Conditional Access policies still apply. ReviewQ does not bypass
 them. See the [Windows guide](windows/README.md) for authentication troubleshooting,
@@ -121,9 +134,18 @@ URLs, titles, comments, prompts, and settings. Windows logs rotate at **1 MiB pe
 file, four files total**; they do not expire by age. Clearing logs does not remove
 settings or already exported ZIPs. Do not put secrets in saved review instructions.
 
-Read [release notes and validation limits](docs/windows-release-v3.0.0.md).
-Native ARM64 execution and exhaustive accessibility/high-contrast/DPI acceptance
-remain to be verified. A **Merge Ready** label is not a guarantee of build,
+The local **unencrypted** startup cache contains display data: titles, author and
+repository/project names, links, badges, timestamps, compact fingerprints, and
+hashed scopes. It contains no PATs, access tokens, descriptions, comment bodies,
+or assistant prompts. It is restored only after normal authentication matches
+the account and queue configuration, expires after seven days, and is bounded
+to 2 MiB and 4,096 PRs. Oversized queues are not partially cached. Saving Settings
+or removing the PAT clears the prior cache; Settings also offers manual clearing.
+Neither this cache nor setup progress is included in diagnostic exports.
+
+Read [release notes and parity details](docs/windows-release-v3.1.0.md).
+Exhaustive accessibility/high-contrast/DPI acceptance remains to be verified.
+A **Merge Ready** label is not a guarantee of build,
 conflict, or every completion-policy requirement.
 
 No separate license grant is added by this Windows port.

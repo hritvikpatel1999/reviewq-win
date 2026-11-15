@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private readonly ReviewController controller;
     private readonly Dictionary<string, bool> collapsed = new();
     private ReviewSnapshot? rendered;
+    private ReviewChanges? renderedChanges;
     public MainWindow(App app, ReviewController controller)
     {
         InitializeComponent();
@@ -30,10 +31,15 @@ public partial class MainWindow : Window
         StatusText.Text = controller.IsRefreshing ? "Refreshing..." :
             snapshot is not null ? $"{snapshot.PendingCount} pending reviews - updated {snapshot.FetchedAt.LocalDateTime:t}" :
             controller.Settings.HasSources ? "Refresh to load your review queue." : "Welcome! Open Settings to add your Azure DevOps sources and sign-in method.";
-        ErrorPanel.Visibility = controller.Error is null ? Visibility.Collapsed : Visibility.Visible;
-        ErrorText.Text = (snapshot is not null && controller.Error is not null ? "Showing the last successful queue. " : "") + controller.Error;
-        if (ReferenceEquals(rendered, snapshot) && QueuePanel.Children.Count > 0) return;
+        UpdatedText.Text = snapshot is null ? "Not updated yet" :
+            $"Updated {Age(DateTimeOffset.UtcNow - snapshot.FetchedAt)} ago" + (controller.IsCached ? " - cached queue" : "");
+        UpdatedText.ToolTip = snapshot is null ? null : $"Last successful update: {snapshot.FetchedAt.LocalDateTime:g}";
+        ErrorPanel.Visibility = controller.Error is null && controller.CacheWarning is null ? Visibility.Collapsed : Visibility.Visible;
+        ErrorText.Text = (snapshot is not null && controller.Error is not null ? "Showing the last successful queue. " : "") +
+            controller.Error + (controller.Error is not null && controller.CacheWarning is not null ? "\n" : "") + controller.CacheWarning;
+        if (ReferenceEquals(rendered, snapshot) && ReferenceEquals(renderedChanges, controller.Changes) && QueuePanel.Children.Count > 0) return;
         rendered = snapshot;
+        renderedChanges = controller.Changes;
         QueuePanel.Children.Clear();
         if (snapshot is null || snapshot.Items.Count == 0)
         {
@@ -53,17 +59,18 @@ public partial class MainWindow : Window
                     foreach (var item in group) cards.Children.Add(Card(item));
                     var first = group.First();
                     QueuePanel.Children.Add(Expandable($"{queue}/{group.Key}", GroupHeader("repository", first.Repository,
-                        $"{first.Organization} / {first.Project}", group.Count()), cards, group.Key));
+                        $"{first.Organization} / {first.Project}", group.Count(), controller.Changes.RepositoryKeys.Contains(first.GroupKey)), cards, group.Key));
                 }
                 continue;
             }
             foreach (var item in items) content.Children.Add(Card(item));
             var title = queue == QueueKind.Followed ? "People you follow" : "I'm the Author";
             QueuePanel.Children.Add(Expandable(queue.ToString(),
-                GroupHeader(queue == QueueKind.Followed ? "people" : "author", title, null, items.Count), content, title));
+                GroupHeader(queue == QueueKind.Followed ? "people" : "author", title, null, items.Count,
+                    queue == QueueKind.Followed ? controller.Changes.Followed : controller.Changes.Authored), content, title));
         }
     }
-    private static UIElement GroupHeader(string icon, string title, string? subtitle, int count)
+    private static UIElement GroupHeader(string icon, string title, string? subtitle, int count, bool changed = false)
     {
         var grid = new Grid { Margin = new(2, 0, 4, 0) };
         grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
@@ -83,6 +90,12 @@ public partial class MainWindow : Window
             Child = new TextBlock { Text = count.ToString(), FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center }
         };
         Grid.SetColumn(badge, 2); grid.Children.Add(badge);
+        if (changed)
+        {
+            var dot = ChangeDot("Section changed since the previous successful refresh");
+            dot.HorizontalAlignment = HorizontalAlignment.Right; dot.VerticalAlignment = VerticalAlignment.Top;
+            grid.Children.Add(dot);
+        }
         return grid;
     }
     private Expander Expandable(string key, UIElement heading, UIElement content, string description)
@@ -106,7 +119,10 @@ public partial class MainWindow : Window
             Text = item.StageLabel, ToolTip = item.Explanation, TextWrapping = TextWrapping.Wrap, Opacity = 0.65,
             FontWeight = FontWeights.SemiBold, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 8, 0)
         };
-        top.Children.Add(stage);
+        var stageRow = new StackPanel { Orientation = Orientation.Horizontal };
+        if (controller.Changes.ItemIds.Contains(item.Id))
+            stageRow.Children.Add(ChangeDot("Pull request is new or changed since the previous successful refresh"));
+        stageRow.Children.Add(stage); top.Children.Add(stageRow);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var edge = ActionButton("edge", "Open in Microsoft Edge");
         edge.Click += async (_, _) => await app.RunActionAsync("edge", () => { ReviewLauncher.Browser(item.Url, true); return Task.CompletedTask; });
@@ -149,9 +165,19 @@ public partial class MainWindow : Window
         AutomationProperties.SetName(button, description);
         return button;
     }
+    private static FrameworkElement ChangeDot(string description)
+    {
+        var dot = new System.Windows.Shapes.Ellipse { Width = 7, Height = 7, Fill = Brushes.SeaGreen,
+            Margin = new(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, ToolTip = description };
+        AutomationProperties.SetName(dot, description);
+        return dot;
+    }
+    private static string Age(TimeSpan age) => age.TotalDays >= 1 ? $"{(int)age.TotalDays}d" :
+        age.TotalHours >= 1 ? $"{(int)age.TotalHours}h" : age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes}m" : "a few seconds";
     private async void RefreshClick(object sender, RoutedEventArgs e) => await controller.RefreshAsync();
     private void SettingsClick(object sender, RoutedEventArgs e) => app.ShowSettings();
     private void DiagnosticsClick(object sender, RoutedEventArgs e) => app.ShowDiagnostics();
+    private void SetupClick(object sender, RoutedEventArgs e) => app.ShowSetup();
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (app.IsQuitting) return;
