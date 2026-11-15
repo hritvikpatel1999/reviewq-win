@@ -8,7 +8,7 @@ using System.Text.Json;
 namespace ReviewQ.Core;
 
 public sealed class AzureDevOpsClient(HttpClient http, IAuthorizationProvider authorization, string cachePath,
-    Action<DiagnosticRecord>? diagnostics = null) : IReviewLoader
+    Action<DiagnosticRecord>? diagnostics = null) : IScopedReviewLoader
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private IdentityStorage cache = new(1, "", []);
@@ -29,7 +29,11 @@ public sealed class AzureDevOpsClient(HttpClient http, IAuthorizationProvider au
         finally { gate.Release(); }
     }
 
-    public async Task<ReviewSnapshot> LoadAsync(ReviewSettings settings, CancellationToken cancellationToken)
+    public Task<ReviewSnapshot> LoadAsync(ReviewSettings settings, CancellationToken cancellationToken) =>
+        LoadAsync(settings, cancellationToken, _ => { });
+
+    public async Task<ReviewSnapshot> LoadAsync(ReviewSettings settings, CancellationToken cancellationToken,
+        Action<string> authenticated)
     {
         settings.Validate();
         await gate.WaitAsync(cancellationToken);
@@ -40,11 +44,14 @@ public sealed class AzureDevOpsClient(HttpClient http, IAuthorizationProvider au
                 var auth = await authorization.GetAsync(settings, cancellationToken);
                 try
                 {
+                    var scope = ReviewQueueCache.Scope(settings, auth.CacheScope);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    authenticated(scope);
                     await ReadCacheAsync(settings, auth, cancellationToken);
                     var snapshot = await FetchAsync(settings, auth, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     await SaveCacheAsync(cancellationToken);
-                    return snapshot;
+                    return snapshot with { IdentityScope = scope };
                 }
                 catch (UnauthorizedResponse) when (settings.Authentication == AuthenticationMethod.AzureCli && attempt == 0)
                 { authorization.Invalidate(); }
@@ -262,7 +269,8 @@ public sealed class AzureDevOpsClient(HttpClient http, IAuthorizationProvider au
             Url = Url(org, [projectName, "_git", repo.Text("id"), "pullrequest", number.ToString()], []),
             CreatedAt = request.Required("creationDate").GetDateTimeOffset(), IsDraft = request.Flag("isDraft"),
             IsRequired = requiredReviewer.ValueKind != JsonValueKind.Undefined && requiredReviewer.Flag("isRequired"),
-            Queue = queue, StageLabel = history.Label, Explanation = explanation, ActiveComments = active, MergeReady = ready
+            Queue = queue, StageLabel = history.Label, Explanation = explanation, ActiveComments = active, MergeReady = ready,
+            ChangeFingerprint = ReviewChanges.Fingerprint(request, threadsDocument.RootElement)
         };
     }
 

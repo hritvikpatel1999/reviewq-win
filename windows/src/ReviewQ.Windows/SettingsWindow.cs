@@ -50,12 +50,11 @@ public sealed class SettingsWindow : Window
         Add(form, "Optional Entra tenant GUID or domain", tenant);
         Add(form, "New PAT (Code: Read; blank keeps the saved token)", pat);
         var remove = new Button { Content = "Remove saved PAT", HorizontalAlignment = HorizontalAlignment.Left };
-        remove.Click += async (_, _) => await app.RunActionAsync("settings", () =>
+        remove.Click += async (_, _) => await app.RunActionAsync("settings", async () =>
         {
             if (MessageBox.Show(this, "Remove the saved PAT from Windows Credential Manager?", "Remove PAT",
                     MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-            { app.PatStore.Remove(); app.InvalidateAuthentication(); validation.Text = "Saved PAT removed."; }
-            return Task.CompletedTask;
+            { await app.RemoveSavedPatAsync(); validation.Text = "Saved PAT and prior startup queue removed."; }
         });
         form.Children.Add(remove);
         Add(form, "Refresh interval (minutes)", interval);
@@ -72,6 +71,11 @@ public sealed class SettingsWindow : Window
         lookup.Click += async (_, _) => await app.RunActionAsync("settings", async () =>
         { await app.Controller.ApplyAsync(app.Controller.Settings, true); validation.Text = "Identity cache cleared; refreshing."; });
         form.Children.Add(lookup);
+        var clearCache = new Button { Content = "Clear startup queue cache", HorizontalAlignment = HorizontalAlignment.Left };
+        clearCache.Click += async (_, _) => await app.RunActionAsync("settings", () =>
+        { app.Controller.ClearStartupCache(); validation.Text = "Startup queue cache cleared. The live queue is unchanged."; return Task.CompletedTask; });
+        form.Children.Add(clearCache);
+        form.Children.Add(Note("Startup cache: local, unencrypted PR display data. It expires after seven days, holds at most 4,096 PRs / 2 MiB, and is excluded from diagnostic exports. Saving Settings clears the old cache."));
         form.Children.Add(new TextBlock { Text = "Review instructions", FontSize = 20, Margin = new(0, 15, 0, 8) });
         form.Children.Add(Note("The first line is always Review PR: {PR Link}. Instructions are stored locally, not encrypted. Do not enter secrets."));
         Add(form, "VS Code Copilot additional instructions", copilot);

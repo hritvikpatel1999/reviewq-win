@@ -28,6 +28,7 @@ public sealed record ReviewItem
     public string Explanation { get; init; } = "";
     public int? ActiveComments { get; init; }
     public bool MergeReady { get; init; }
+    public string ChangeFingerprint { get; init; } = "";
     public string Id => $"{Organization}/{RepositoryId}/{Number}".ToLowerInvariant();
     public string GroupKey => $"{Organization}/{Project}/{Repository}";
 }
@@ -35,11 +36,17 @@ public sealed record ReviewSnapshot(IReadOnlyList<ReviewItem> Items)
 {
     public int PendingCount => Items.Count(x => x.Queue == QueueKind.Assigned);
     public DateTimeOffset FetchedAt { get; init; } = DateTimeOffset.Now;
+    public string IdentityScope { get; init; } = "";
 }
 public interface IReviewLoader
 {
     Task<ReviewSnapshot> LoadAsync(ReviewSettings settings, CancellationToken cancellationToken);
     Task ClearIdentitiesAsync(CancellationToken cancellationToken);
+}
+public interface IScopedReviewLoader : IReviewLoader
+{
+    Task<ReviewSnapshot> LoadAsync(ReviewSettings settings, CancellationToken cancellationToken,
+        Action<string> authenticated);
 }
 
 internal static class Json

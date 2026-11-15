@@ -11,25 +11,31 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
     private CancellationTokenSource generation = new();
     private CancellationTokenSource? polling;
     private long revision;
+    private readonly ReviewQueueCache? cache;
     public event PropertyChangedEventHandler? PropertyChanged;
     public ReviewSettings Settings { get; private set; }
     public ReviewSnapshot? Snapshot { get; private set; }
     public bool IsRefreshing { get; private set; }
     public string? Error { get; private set; }
-    public ReviewController(ReviewSettings settings, IReviewLoader loader, Action<DiagnosticRecord> log)
-    { Settings = settings; this.loader = loader; this.log = log; }
+    public string? CacheWarning { get; private set; }
+    public bool IsCached { get; private set; }
+    public ReviewChanges Changes { get; private set; } = new();
+    public ReviewController(ReviewSettings settings, IReviewLoader loader, Action<DiagnosticRecord> log,
+        ReviewQueueCache? cache = null)
+    { Settings = settings; this.loader = loader; this.log = log; this.cache = cache; }
     public void Report(string message) { Error = message; Changed(); }
-    public void Start()
+    public void Start(bool refreshImmediately = true)
     {
         polling?.Cancel();
         polling?.Dispose();
         polling = new();
-        _ = PollAsync(polling.Token);
+        _ = PollAsync(polling.Token, refreshImmediately);
     }
-    private async Task PollAsync(CancellationToken ct)
+    private async Task PollAsync(CancellationToken ct, bool refreshImmediately)
     {
         try
         {
+            if (!refreshImmediately) await Task.Delay(TimeSpan.FromMinutes(Settings.RefreshMinutes), ct);
             while (!ct.IsCancellationRequested)
             {
                 await RefreshAsync();
@@ -49,10 +55,41 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
         try
         {
             Log(new("refreshStarted", "reviews"));
-            var snapshot = await loader.LoadAsync(Settings with { }, ct);
+            void Authenticated(string scope)
+            {
+                if (current != revision || ct.IsCancellationRequested) return;
+                if (Snapshot is not null && Snapshot.IdentityScope != scope)
+                { Snapshot = null; Changes = new(); IsCached = false; Changed(); }
+                if (Snapshot is null && cache is not null)
+                {
+                    try
+                    {
+                        Snapshot = cache.Restore(scope, DateTimeOffset.UtcNow);
+                        IsCached = Snapshot is not null;
+                        Changed();
+                    }
+                    catch (Exception ex) when (UiErrors.IsExpected(ex))
+                    { CacheWarning = "Startup cache could not be restored. " + UiErrors.Message(ex); Changed(); }
+                }
+            }
+            var snapshot = loader is IScopedReviewLoader scoped
+                ? await scoped.LoadAsync(Settings with { }, ct, Authenticated)
+                : await loader.LoadAsync(Settings with { }, ct);
             if (current != revision || ct.IsCancellationRequested) return;
+            Changes = new(Snapshot, snapshot);
             Snapshot = snapshot;
+            IsCached = false;
             Error = null;
+            if (cache is not null)
+            {
+                try
+                {
+                    CacheWarning = cache.Save(snapshot) ? null :
+                        "This queue is too large to cache. Live refresh still works; no partial queue was saved.";
+                }
+                catch (Exception ex) when (UiErrors.IsExpected(ex))
+                { CacheWarning = "The queue refreshed, but the startup cache could not be saved. " + UiErrors.Message(ex); }
+            }
             Log(new("refreshFinished", "reviews", Outcome: "success"));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -73,19 +110,38 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
             if (current == revision) { IsRefreshing = false; Changed(); }
         }
     }
-    public async Task ApplyAsync(ReviewSettings settings, bool clearIdentities = false)
+    public async Task ApplyAsync(ReviewSettings settings, bool clearIdentities = false, ReviewSnapshot? verifiedSnapshot = null)
     {
+        ClearStartupCache();
         generation.Cancel();
         generation.Dispose();
         generation = new();
         revision++;
         IsRefreshing = false;
         Settings = settings;
-        Snapshot = null;
+        Snapshot = verifiedSnapshot;
         Error = null;
+        IsCached = false;
+        Changes = new();
         Changed();
         if (clearIdentities) await loader.ClearIdentitiesAsync(generation.Token);
-        Start();
+        if (verifiedSnapshot is not null && cache is not null)
+        {
+            try
+            {
+                CacheWarning = cache.Save(verifiedSnapshot) ? null :
+                    "This queue is too large to cache. Live refresh still works; no partial queue was saved.";
+            }
+            catch (Exception ex) when (UiErrors.IsExpected(ex))
+            { CacheWarning = "Your queue is ready, but the startup cache could not be saved. " + UiErrors.Message(ex); }
+            Changed();
+        }
+        Start(verifiedSnapshot is null);
+    }
+    public void ClearStartupCache()
+    {
+        cache?.Clear();
+        CacheWarning = null;
     }
     public void Changed([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

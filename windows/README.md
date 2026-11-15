@@ -13,9 +13,9 @@ Use the package matching **Settings > System > About > System type**:
 
 | CPU | Portable package | Per-user installer |
 |---|---|---|
-| x86 compatibility (32-bit process) | `ReviewQ-3.0.0-win-x86.zip` | `ReviewQ-3.0.0-win-x86-setup.exe` |
-| Intel/AMD x64 | `ReviewQ-3.0.0-win-x64.zip` | `ReviewQ-3.0.0-win-x64-setup.exe` |
-| Windows on ARM | `ReviewQ-3.0.0-win-arm64.zip` | `ReviewQ-3.0.0-win-arm64-setup.exe` |
+| x86 compatibility (32-bit process) | `ReviewQ-3.1.0-win-x86.zip` | `ReviewQ-3.1.0-win-x86-setup.exe` |
+| Intel/AMD x64 | `ReviewQ-3.1.0-win-x64.zip` | `ReviewQ-3.1.0-win-x64-setup.exe` |
+| Windows on ARM | `ReviewQ-3.1.0-win-arm64.zip` | `ReviewQ-3.1.0-win-arm64-setup.exe` |
 
 Build outputs are in `dist\windows` relative to the repository root.
 For portable use, extract **the entire ZIP** into a permanent folder and open
@@ -35,9 +35,9 @@ There is no auto-updater or Microsoft Store package.
 ## Visibility and background behavior
 
 - Interactive launch opens the queue, with a normal taskbar button.
-- First launch also opens Settings. Closing the queue keeps polling in the tray.
+- First launch also opens resumable setup. Closing the queue keeps polling in the tray.
 - Clicking the tray icon opens/focuses the queue. Its menu includes Refresh,
-  Settings, Diagnostics, and **Quit ReviewQ**, which ends background work.
+  Settings, Run Setup, Diagnostics, and **Quit ReviewQ**, which ends background work.
 - Windows may hide the tray icon behind overflow. Drag ReviewQ beside the clock,
   or use Windows taskbar tray settings. The app cannot force permanent visibility.
 - Pin ReviewQ yourself from its taskbar button or Start menu if desired.
@@ -46,9 +46,27 @@ There is no auto-updater or Microsoft Store package.
 - Startup at sign-in is opt-in and starts quietly in the tray. An unconfigured
   app or startup error still opens the window.
 - Reopening the app activates the existing per-user instance.
-- Queue, Settings, and Diagnostics all follow the Windows light/dark theme.
+- Queue, Setup, Settings, and Diagnostics all follow the Windows light/dark theme.
 - A pending count appears in the title/tray tooltip; a taskbar overlay indicates
   count or errors where Windows supports it. Only assigned reviews count.
+- Green tray/taskbar, section, and PR dots show changes since the previous
+  successful refresh. Opening a PR does not clear them, and failed refreshes
+  preserve them. Removed PRs mark their former sections. These are not unread dots.
+
+## First-run setup
+
+Six screens guide you through welcome, sources, authentication, optional
+companions, preferences, and the ready queue. **Test connection** verifies access
+using the same read-only loader. Preference changes recheck the selected queues.
+**Open my queue** saves settings and reuses the verified result, avoiding an
+immediate duplicate fetch. Your default browser is sufficient; VS Code/Copilot
+are optional and Scout remains unavailable.
+
+Closing setup preserves non-secret choices and progress, but clears an unsaved
+PAT and connection verification. Resume requires a fresh check. Existing
+configured users skip automatic setup. **Run Setup** in the queue footer or tray
+replays it; **Keep existing settings** discards the draft without changing saved
+preferences. Save/close any Settings editor before replaying setup.
 
 ## Configure Azure DevOps
 
@@ -151,12 +169,27 @@ do not make Scout functional.
 
 - `settings.json`: versioned, atomically replaced settings (no PAT).
 - `identity-cache.json`: scoped identity IDs and timestamps (no access tokens).
+- `setup-identity-cache.json`: identity IDs scoped to setup verification.
+- `queue-cache.json`: unencrypted, bounded PR display data for authenticated startup.
+- `setup-progress.json`: non-secret setup draft/progress, never PATs or verification.
 - `Logs\reviewq.log` and up to three rotated 1 MiB backups.
 
 Diagnostics contains allowlisted event/category/status/timing fields, never
 credentials, URLs, titles, discussion text, prompts, or settings. Verbose logging
 is opt-in for the current process only. Exports include only these logs and
 version/OS/architecture metadata. Inspect any ZIP before sharing it.
+Queue caches and setup progress are never exported.
+
+The startup queue cache contains titles, authors, repository/project names,
+links, badges, timestamps, compact change fingerprints, and hashed scopes.
+It excludes credentials, descriptions, discussion bodies, and prompts. It loads
+only after normal authentication matches the account and queue configuration.
+The original **Updated ... ago** time remains visible while fresh data loads.
+It expires after seven days, with a maximum of 2 MiB and 4,096 PRs; oversized
+queues are not partially saved. Saving Settings or removing the PAT clears the
+prior cache. Use **Clear startup queue cache** in Settings for manual removal.
+Cache restoration and change detection add no HTTP/authentication requests or
+polling timers. Read/cache-write failures are reported without hiding a live queue.
 
 The Diagnostics window follows the system theme and provides a live log-storage
 readout, **Export Logs**, **Show in Explorer**, and **Clear Logs** (with confirmation).
@@ -179,7 +212,7 @@ or shifting nearby text. Scout remains disabled; authored PRs keep browser-only
 actions.
 
 Uninstall through Windows Installed apps. The installer removes its own startup
-registration but **retains settings, identity cache, logs, and the PAT**, so
+registration but **retains settings, caches, setup progress, logs, and the PAT**, so
 reinstallation does not discard account configuration. To remove personal data,
 first remove the PAT in Settings, quit ReviewQ, then delete the specific
 `%LOCALAPPDATA%\ReviewQ` folder yourself. Portable users should disable startup
@@ -219,7 +252,7 @@ The Windows workflow runs the solution tests, packages the native target, and
 runs `ReviewQ.exe --smoke-test` for x86 and x64 on x64 GitHub runners and ARM64
 on a native ARM64 runner.
 The ARM runner requires availability for this repository/account. The smoke
-switch uses a disposable, unconfigured profile, verifies the queue/settings
+switch uses a disposable, unconfigured profile, verifies the queue/setup
 windows loaded, and exits automatically without changing your real settings,
 PAT, startup setting, or global shortcut.
 
@@ -235,7 +268,10 @@ The installed x64 app has also been checked with live Azure CLI token acquisitio
 queue refresh, system dark-theme rendering, optional queue layout, hover sizing,
 diagnostics controls, and settings-preserving upgrades.
 
-**Not yet release-validated:** native ARM64 execution; live Azure DevOps
+The 3.0.0 CI release passed native ARM64 startup smoke. A 3.1.0 candidate must
+pass its own CI before release; that does not replace interactive acceptance.
+
+**Not yet release-validated:** full interactive native ARM64 acceptance; live Azure DevOps
 PAT/tenant/account acceptance scenarios; actual Copilot/Edge interactions; complete
 keyboard/screen-reader, light/high-contrast, reduced-motion, DPI/multi-monitor,
 Explorer restart, wake, startup, and install-upgrade acceptance. CI definitions

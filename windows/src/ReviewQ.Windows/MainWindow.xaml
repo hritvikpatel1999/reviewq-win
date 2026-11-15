@@ -17,8 +17,15 @@
     <TextBlock x:Name="ErrorText" TextWrapping="Wrap" AutomationProperties.LiveSetting="Assertive"/>
    </Border>
   </StackPanel>
-  <TextBlock DockPanel.Dock="Bottom" Margin="0,10,0,0" Opacity="0.7" TextWrapping="Wrap" FontSize="11"
-   Text="Closing this window keeps ReviewQ in the tray. Use the tray menu to Quit. Windows may hide the tray icon behind overflow."/>
+  <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+   <WrapPanel VerticalAlignment="Center">
+    <TextBlock x:Name="UpdatedText" VerticalAlignment="Center" Margin="0,0,12,0" Opacity="0.75" TextWrapping="Wrap"/>
+    <Button Content="Run Setup" Click="SetupClick" Foreground="{DynamicResource {x:Static SystemColors.AccentColorBrushKey}}"
+     ToolTip="Run resumable setup without discarding saved settings"/>
+   </WrapPanel>
+   <TextBlock Margin="0,8,0,0" Opacity="0.7" TextWrapping="Wrap" FontSize="11"
+    Text="Closing this window keeps ReviewQ in the tray. Use the tray menu to Quit. Windows may hide the tray icon behind overflow."/>
+  </StackPanel>
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
    <StackPanel x:Name="QueuePanel"/>
   </ScrollViewer>

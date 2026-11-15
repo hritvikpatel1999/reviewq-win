@@ -46,6 +46,46 @@ public sealed class ClientTests : IDisposable
     private static Dictionary<string, string> Query(Uri uri) => uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
         .Select(x => x.Split('=', 2)).ToDictionary(x => Uri.UnescapeDataString(x[0]), x => Uri.UnescapeDataString(x[1]));
     [Fact]
+    public async Task AuthenticatedCacheScopeAndChangeFingerprintAddNoRequests()
+    {
+        var commit = "source-commit-1";
+        var content = "Original comment body";
+        using var handler = new Handler(uri =>
+        {
+            if (uri.AbsolutePath.EndsWith("/pullrequests"))
+            {
+                var request = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(PullRequest()))!;
+                request["sourceRefName"] = "refs/heads/feature";
+                request["targetRefName"] = "refs/heads/main";
+                request["lastMergeSourceCommit"] = new System.Text.Json.Nodes.JsonObject { ["commitId"] = commit };
+                return List([request]);
+            }
+            if (uri.AbsolutePath.EndsWith("/threads")) return List([new
+            {
+                id = 1, status = "active", comments = new[]
+                { new { author = new { id = Author }, content, commentType = "text", isDeleted = false } }
+            }]);
+            return Default(uri);
+        });
+        string? scope = null;
+        var client = Client(handler);
+        var original = await client.LoadAsync(Settings, default, value =>
+        { Assert.Empty(handler.Requests); scope = value; });
+        Assert.Equal(scope, original.IdentityScope);
+        Assert.Equal(3, handler.Requests.Count);
+        var unchanged = await client.LoadAsync(Settings, default);
+        Assert.False(new ReviewChanges(original, unchanged).HasChanges);
+        commit = "source-commit-2";
+        var changedCommit = await client.LoadAsync(Settings, default);
+        Assert.Contains(original.Items[0].Id, new ReviewChanges(unchanged, changedCommit).ItemIds);
+        content = "Edited comment body";
+        var changedComment = await client.LoadAsync(Settings, default);
+        Assert.Contains(original.Items[0].Id, new ReviewChanges(changedCommit, changedComment).ItemIds);
+        Assert.Equal(9, handler.Requests.Count);
+        Assert.DoesNotContain("Edited comment body", changedComment.Items[0].ChangeFingerprint);
+        Assert.Equal(64, changedComment.Items[0].ChangeFingerprint.Length);
+    }
+    [Fact]
     public async Task AssignedFilteringAndOptionalQueuesMakeNoExtraCalls()
     {
         using var handler = new Handler(uri => uri.AbsolutePath.EndsWith("/pullrequests") ?
