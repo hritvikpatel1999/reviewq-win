@@ -79,8 +79,8 @@ public sealed class SettingsWindow : Window
         form.Children.Add(new TextBlock { Text = "Review instructions", FontSize = 20, Margin = new(0, 15, 0, 8) });
         form.Children.Add(Note("The first line is always Review PR: {PR Link}. Instructions are stored locally, not encrypted. Do not enter secrets."));
         Add(form, "VS Code Copilot additional instructions", copilot);
-        Add(form, "Scout additional instructions (saved for future support)", scout);
-        form.Children.Add(Note("Scout is disabled because a reliable Windows integration has not been verified. No blind typing or automatic submission is used."));
+        Add(form, "Scout additional instructions", scout);
+        form.Children.Add(Note("Scout opens a new chat, verifies the review prompt, then sends it using Windows accessibility controls. Existing drafts are never overwritten; no clipboard or blind typing is used."));
         form.Children.Add(counts);
         form.Children.Add(Note("Visibility: ReviewQ cannot force its tray icon out of Windows overflow. Drag it beside the clock or change taskbar tray settings. You can manually pin ReviewQ to the taskbar."));
         sources.Text = settings.SourceUrls; tenant.Text = settings.TenantId; emails.Text = settings.FollowedAuthorEmails;

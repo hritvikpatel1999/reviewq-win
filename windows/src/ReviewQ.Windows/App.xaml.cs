@@ -274,8 +274,9 @@ public partial class App : Application
     }
     public async Task RunActionAsync(string operation, Func<Task> action)
     {
-        if (launching && operation == "copilot") { Controller.Report("A review launch is already in progress. Wait for it to finish."); return; }
-        if (operation == "copilot") launching = true;
+        var reviewLaunch = operation is "copilot" or "scout";
+        if (launching && reviewLaunch) { Controller.Report("A review launch is already in progress. Wait for it to finish."); return; }
+        if (reviewLaunch) launching = true;
         try
         {
             await action();
@@ -288,7 +289,7 @@ public partial class App : Application
             diagnostics!.Write(new("actionFailed", operation, Outcome: "system"));
             ShowQueue();
         }
-        finally { if (operation == "copilot") launching = false; }
+        finally { if (reviewLaunch) launching = false; }
     }
     private void UpdateStatus()
     {

@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <Version>3.1.0</Version>
+    <Version>3.2.0</Version>
     <Company>ReviewQ</Company>
     <Product>ReviewQ</Product>
     <Copyright>ReviewQ contributors</Copyright>

@@ -13,9 +13,9 @@ Use the package matching **Settings > System > About > System type**:
 
 | CPU | Portable package | Per-user installer |
 |---|---|---|
-| x86 compatibility (32-bit process) | `ReviewQ-3.1.0-win-x86.zip` | `ReviewQ-3.1.0-win-x86-setup.exe` |
-| Intel/AMD x64 | `ReviewQ-3.1.0-win-x64.zip` | `ReviewQ-3.1.0-win-x64-setup.exe` |
-| Windows on ARM | `ReviewQ-3.1.0-win-arm64.zip` | `ReviewQ-3.1.0-win-arm64-setup.exe` |
+| x86 compatibility (32-bit process) | `ReviewQ-3.2.0-win-x86.zip` | `ReviewQ-3.2.0-win-x86-setup.exe` |
+| Intel/AMD x64 | `ReviewQ-3.2.0-win-x64.zip` | `ReviewQ-3.2.0-win-x64-setup.exe` |
+| Windows on ARM | `ReviewQ-3.2.0-win-arm64.zip` | `ReviewQ-3.2.0-win-arm64-setup.exe` |
 
 Build outputs are in `dist\windows` relative to the repository root.
 For portable use, extract **the entire ZIP** into a permanent folder and open
@@ -60,7 +60,17 @@ companions, preferences, and the ready queue. **Test connection** verifies acces
 using the same read-only loader. Preference changes recheck the selected queues.
 **Open my queue** saves settings and reuses the verified result, avoiding an
 immediate duplicate fetch. Your default browser is sufficient; VS Code/Copilot
-are optional and Scout remains unavailable.
+are optional. Setup detects Scout in the standard per-user and system installation
+folders, even when it is not running. Its queue action starts a new Scout review chat.
+
+The setup layout follows the macOS app's centered headings, rounded cards,
+six progress markers and pill-shaped navigation, with a native Windows title
+bar and scrolling on smaller displays. CLI and PAT authentication use a
+segmented selector and show only the relevant fields. Edge, Scout and Copilot
+actions use the supplied reference artwork; queue icons stay compact and grow
+slightly on hover. High-contrast mode uses system-colored vector symbols.
+Successful connection checks show a green tick beside the confirmation text
+(a system-colored tick in high-contrast mode); pending and failed checks do not.
 
 Closing setup preserves non-secret choices and progress, but clears an unsaved
 PAT and connection verification. Resume requires a fresh check. Existing
@@ -160,9 +170,22 @@ supported; tabs/control characters are rejected. Prompt text is passed as one
 process argument, never concatenated into a shell command. Instructions are
 stored as local settings, not encrypted: do not put secrets in them.
 
-**Scout is disabled** with an explanatory tooltip. A reliable Windows integration
-has not been verified. Saved Scout instructions reserve future compatibility but
-do not make Scout functional.
+**Scout** opens a new chat using Windows UI Automation, fills the accessible
+Message composer with the PR link and Scout instructions, verifies the full
+prompt, then invokes Send once. It confirms the composer cleared and Scout
+started responding or recorded a user message. It does not use a URL protocol,
+global keystrokes, the clipboard, or private Scout APIs. Scout's Chromium composer
+receives process-targeted Unicode text and thread-scoped Shift+Enter line breaks;
+ReviewQ checks focus and acknowledges each text chunk before continuing.
+Whitespace-only composers (including Scout's empty placeholder newline) are
+treated as empty, but an unreadable composer is never assumed to be safe.
+
+Sign in to Scout first and run both applications without administrator elevation.
+If Scout already has a draft, ReviewQ leaves it untouched and asks you to send or
+save it before retrying. Changed drafts, ambiguous/missing controls, and sign-in
+dialogs stop the handoff with an error. If submission cannot be confirmed, check
+Scout before retrying to avoid duplicate reviews. Scout's accessible English
+control labels (`New chat`, `Message`, `Send`) are required.
 
 ## Storage, diagnostics, and uninstall
 
@@ -209,7 +232,7 @@ be collapsed independently.
 
 Icon-only Edge/Copilot/Scout actions have accessible names and tooltips. Their
 16-DIP icons grow subtly to 18 DIP on hover without changing the button hit area
-or shifting nearby text. Scout remains disabled; authored PRs keep browser-only
+or shifting nearby text. Scout and Copilot open new review chats; authored PRs keep browser-only
 actions.
 
 Uninstall through Windows Installed apps. The installer removes its own startup
@@ -269,8 +292,11 @@ The installed x64 app has also been checked with live Azure CLI token acquisitio
 queue refresh, system dark-theme rendering, optional queue layout, hover sizing,
 diagnostics controls, and settings-preserving upgrades.
 
-The 3.0.0 CI release passed native ARM64 startup smoke. A 3.1.0 candidate must
-pass its own CI before release; that does not replace interactive acceptance.
+The Windows workflow builds and smoke-tests x86, x64, and native ARM64 targets.
+Check the workflow results for the release commit; these checks do not replace
+interactive acceptance. Local Scout prompt-entry verification covered exact
+multiline text, Unicode, emoji, and blank lines against a running Scout instance
+from both x86 and x64 clients, without submitting validation chats.
 
 **Not yet release-validated:** full interactive native ARM64 acceptance; live Azure DevOps
 PAT/tenant/account acceptance scenarios; actual Copilot/Edge interactions; complete

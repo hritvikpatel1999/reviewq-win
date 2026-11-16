@@ -42,6 +42,7 @@ public sealed class PlatformAndControllerTests : IDisposable
         var logs = new PrivateDiagnostics(directory) { Verbose = true };
         logs.Write(new("secret-token", "sensitive-title", 987, -1, "private-prompt"));
         logs.Write(new("requestFinished", "reviews", 200, 15, "success"));
+        logs.Write(new("actionFinished", "scout", Outcome: "success"));
         File.WriteAllText(Path.Combine(directory, "settings.json"), "secret-settings");
         File.WriteAllText(Path.Combine(directory, "reviewq.log.extra"), "secret-extra");
         var destination = Path.Combine(directory, "export.zip");
@@ -53,6 +54,7 @@ public sealed class PlatformAndControllerTests : IDisposable
         Assert.DoesNotContain("secret", content);
         Assert.DoesNotContain("sensitive", content);
         Assert.DoesNotContain("private", content);
+        Assert.Contains("\"operation\":\"scout\"", content);
         using var first = JsonDocument.Parse(content.Split(Environment.NewLine)[0]);
         Assert.Equal("unknown", first.RootElement.GetProperty("event").GetString());
         Assert.Equal(JsonValueKind.Null, first.RootElement.GetProperty("status").ValueKind);
@@ -221,6 +223,7 @@ public sealed class PlatformAndControllerTests : IDisposable
                 {
                     Source = new Uri("/ReviewQ;component/UiStyles.xaml", UriKind.Relative)
                 });
+                VerifyScoutAccessibilityHandoff();
                 using var controller = new ReviewController(Settings, new Loader
                 {
                     Load = (_, _) => Task.FromResult(new ReviewSnapshot(Enum.GetValues<QueueKind>().SelectMany(kind =>
@@ -247,20 +250,137 @@ public sealed class PlatformAndControllerTests : IDisposable
 #pragma warning restore WPF0001
                 Assert.True(settings.IsLoaded);
                 Assert.True(diagnostics.IsLoaded);
+                var failSetupVerification = false;
                 using var setupSession = new SetupSession(Settings, new SetupProgressStore(Path.Combine(directory, "Setup")),
-                    (_, _, _) => Task.FromResult(new ReviewSnapshot([])), (_, _, _) => Task.CompletedTask, _ => { });
+                    (_, _, _) => failSetupVerification
+                        ? Task.FromException<ReviewSnapshot>(new ReviewException("Synthetic connection failure"))
+                        : Task.FromResult(new ReviewSnapshot([])), (_, _, _) => Task.CompletedTask, _ => { });
                 setupSession.Begin(Settings);
                 var setupWindow = new SetupWindow(app, setupSession, true);
                 setupWindow.Show();
 #pragma warning disable WPF0001
                 Assert.Equal(System.Windows.ThemeMode.System, setupWindow.ThemeMode);
+                var captureTheme = Environment.GetEnvironmentVariable("REVIEWQ_UI_THEME");
+                if (captureTheme == "Light") setupWindow.ThemeMode = System.Windows.ThemeMode.Light;
+                if (captureTheme == "Dark") setupWindow.ThemeMode = System.Windows.ThemeMode.Dark;
 #pragma warning restore WPF0001
+                setupWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                setupWindow.UpdateLayout();
                 Assert.True(setupWindow.IsLoaded);
                 for (var step = 0; step < 6; step++)
                 {
                     Assert.Contains(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
                         text => text.Text == $"Step {step + 1} of 6");
-                    if (setupSession.Step == SetupStep.Authentication) setupSession.TestAsync().GetAwaiter().GetResult();
+                    if (setupSession.Step == SetupStep.Authentication)
+                    {
+                        System.Windows.FrameworkElement SuccessIcon() => Assert.Single(
+                            Descendants(setupWindow).OfType<System.Windows.FrameworkElement>(),
+                            element => System.Windows.Automation.AutomationProperties.GetName(element) == "Connection verified");
+                        Assert.Equal(System.Windows.Visibility.Collapsed, SuccessIcon().Visibility);
+                        void CheckPendingIcon()
+                        {
+                            if (setupSession.IsChecking)
+                                Assert.Equal(System.Windows.Visibility.Collapsed, SuccessIcon().Visibility);
+                        }
+                        setupSession.Changed += CheckPendingIcon;
+                        var methods = Descendants(setupWindow).OfType<System.Windows.Controls.RadioButton>().ToArray();
+                        Assert.Equal(2, methods.Length);
+                        var pat = Assert.Single(methods, method => Equals(method.Content, "Personal access token"));
+                        pat.IsChecked = true;
+                        var token = Assert.Single(Descendants(setupWindow).OfType<System.Windows.Controls.PasswordBox>());
+                        Assert.True(token.IsVisible);
+                        token.Password = "synthetic-ui-test-token";
+                        Assert.Equal("synthetic-ui-test-token", setupSession.Token);
+                        methods.Single(method => !ReferenceEquals(method, pat)).IsChecked = true;
+                        Assert.False(token.IsVisible);
+                        Assert.Equal("synthetic-ui-test-token", setupSession.Token);
+                        setupSession.TestAsync().GetAwaiter().GetResult();
+                        Assert.Equal(System.Windows.Visibility.Visible, SuccessIcon().Visibility);
+                        var tick = Assert.IsType<System.Windows.Shapes.Path>(SuccessIcon());
+                        if (!System.Windows.SystemParameters.HighContrast)
+                            Assert.Equal(System.Windows.Media.Colors.SeaGreen,
+                                Assert.IsType<System.Windows.Media.SolidColorBrush>(tick.Stroke).Color);
+                        var successText = Assert.Single(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                            text => text.Text.StartsWith("Connected.", StringComparison.Ordinal));
+                        setupWindow.UpdateLayout();
+                        Assert.True(tick.TranslatePoint(new System.Windows.Point(tick.ActualWidth, 0), setupWindow).X
+                            < successText.TranslatePoint(new System.Windows.Point(), setupWindow).X);
+                        failSetupVerification = true;
+                        setupSession.TestAsync().GetAwaiter().GetResult();
+                        Assert.Equal(System.Windows.Visibility.Collapsed, SuccessIcon().Visibility);
+                        Assert.Contains(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                            text => text.Text.Contains("Synthetic connection failure", StringComparison.Ordinal));
+                        failSetupVerification = false;
+                        setupSession.TestAsync().GetAwaiter().GetResult();
+                        Assert.Equal(System.Windows.Visibility.Visible, SuccessIcon().Visibility);
+                        setupSession.Changed -= CheckPendingIcon;
+                        setupSession.AdvanceAsync().GetAwaiter().GetResult();
+                        setupSession.Back();
+                        Assert.Equal(SetupStep.Authentication, setupSession.Step);
+                        Assert.Equal("synthetic-ui-test-token",
+                            Assert.Single(Descendants(setupWindow).OfType<System.Windows.Controls.PasswordBox>()).Password);
+                        Assert.Contains(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                            text => text.Text.StartsWith("Connected.", StringComparison.Ordinal));
+                        Assert.Equal(System.Windows.Visibility.Visible, SuccessIcon().Visibility);
+                    }
+                    if (setupSession.Step == SetupStep.Companions)
+                    {
+                        var scoutStatus = Assert.Single(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                            text => System.Windows.Automation.AutomationProperties.GetName(text) == "Scout installation status");
+                        Assert.Equal(ReviewLauncher.FindScout() is not null ? "Detected" : "Not detected", scoutStatus.Text);
+                        Assert.Contains(Descendants(setupWindow).OfType<System.Windows.Controls.TextBlock>(),
+                            text => text.Text.Contains("Starts a new review chat using Windows accessibility controls.", StringComparison.Ordinal));
+                        var recheck = Assert.Single(Descendants(setupWindow).OfType<System.Windows.Controls.Button>(),
+                            button => Equals(button.Content, "Recheck installed companions"));
+                        scoutStatus.Text = "stale";
+                        recheck.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                        Assert.Equal(ReviewLauncher.FindScout() is not null ? "Detected" : "Not detected", scoutStatus.Text);
+                    }
+                    foreach (var size in new[] { (Width: 540d, Height: 440d), (Width: 800d, Height: 780d) })
+                    {
+                        setupWindow.Width = size.Width; setupWindow.Height = size.Height;
+                        setupWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                        setupWindow.UpdateLayout();
+                        var setupElements = Descendants(setupWindow).ToArray();
+                        var continueButton = Assert.Single(setupElements.OfType<System.Windows.Controls.Button>(),
+                            button => button.IsDefault);
+                        Assert.True(continueButton.IsVisible);
+                        var position = continueButton.TranslatePoint(new System.Windows.Point(), setupWindow);
+                        Assert.True(position.X >= 0 && position.X + continueButton.ActualWidth <= setupWindow.ActualWidth);
+                        Assert.True(position.Y >= 0 && position.Y + continueButton.ActualHeight <= setupWindow.ActualHeight);
+                        var navigation = Assert.IsType<System.Windows.Controls.Grid>(continueButton.Parent);
+                        var visibleButtons = navigation.Children.OfType<System.Windows.Controls.Button>()
+                            .Where(button => button.IsVisible).OrderBy(button => button.TranslatePoint(new System.Windows.Point(), navigation).X).ToArray();
+                        for (var index = 1; index < visibleButtons.Length; index++)
+                            Assert.True(visibleButtons[index - 1].TranslatePoint(new System.Windows.Point(visibleButtons[index - 1].ActualWidth, 0), navigation).X
+                                <= visibleButtons[index].TranslatePoint(new System.Windows.Point(), navigation).X,
+                                "Setup navigation buttons must not overlap at the minimum window width.");
+                        var captureDirectory = Environment.GetEnvironmentVariable("REVIEWQ_UI_CAPTURES");
+                        if (!string.IsNullOrEmpty(captureDirectory))
+                        {
+                            Directory.CreateDirectory(captureDirectory);
+                            var content = setupWindow;
+                            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                                (int)content.ActualWidth, (int)content.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                            var drawing = new System.Windows.Media.DrawingVisual();
+                            using (var context = drawing.RenderOpen())
+                            {
+                                var bounds = new System.Windows.Rect(0, 0, content.ActualWidth, content.ActualHeight);
+                                context.DrawRectangle(captureTheme == "Light" ? System.Windows.Media.Brushes.White :
+                                    new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(32, 32, 32)), null, bounds);
+                                context.DrawRectangle(new System.Windows.Media.VisualBrush(content)
+                                {
+                                    ViewboxUnits = System.Windows.Media.BrushMappingMode.Absolute,
+                                    Viewbox = bounds, Stretch = System.Windows.Media.Stretch.Fill
+                                }, null, bounds);
+                            }
+                            bitmap.Render(drawing);
+                            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                            using var output = File.Create(Path.Combine(captureDirectory, $"setup-{step + 1}-{size.Width}.png"));
+                            encoder.Save(output);
+                        }
+                    }
                     setupSession.AdvanceAsync().GetAwaiter().GetResult();
                 }
                 setupWindow.Close();
@@ -305,12 +425,20 @@ public sealed class PlatformAndControllerTests : IDisposable
                 Assert.True(settingsLeft - refreshRight >= 8, "Toolbar buttons need an eight-DIP visible gap.");
                 Assert.Equal(9, buttons.Count(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Open in Microsoft Edge"));
                 Assert.Equal(6, buttons.Count(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Start a new VS Code Copilot agent chat"));
-                Assert.Equal(6, buttons.Count(button => !button.IsEnabled && System.Windows.Automation.AutomationProperties.GetName(button).StartsWith("Scout unavailable", StringComparison.Ordinal)));
+                Assert.Equal(6, buttons.Count(button => button.IsEnabled && System.Windows.Automation.AutomationProperties.GetName(button) == "Start a new Scout review chat"));
                 foreach (var button in buttons.Where(button => Equals(button.Style, app.Resources["ReviewIconButton"])))
                 {
                     var icon = Assert.IsAssignableFrom<System.Windows.FrameworkElement>(button.Content);
                     Assert.Equal(16, icon.Width);
                     Assert.Equal(16, icon.Height);
+                    if (!System.Windows.SystemParameters.HighContrast)
+                    {
+                        var image = Assert.IsType<System.Windows.Controls.Image>(icon);
+                        var artwork = Assert.IsAssignableFrom<System.Windows.Media.Imaging.BitmapSource>(image.Source);
+                        Assert.True(artwork.IsFrozen);
+                        Assert.InRange(artwork.PixelWidth, 32, 64);
+                        Assert.InRange(artwork.PixelHeight, 32, 64);
+                    }
                     Assert.Equal(34, button.ActualWidth);
                     var hover = Assert.Single(button.Template.Triggers.OfType<System.Windows.Trigger>(),
                         trigger => trigger.Property == System.Windows.UIElement.IsMouseOverProperty);
@@ -411,6 +539,66 @@ public sealed class PlatformAndControllerTests : IDisposable
         Directory.CreateDirectory(bin);
         File.WriteAllText(Path.Combine(bin, "code.cmd"), "@echo off\n\"%~dp0..\\..\\outside\\cli.js\"");
         Assert.Null(ReviewLauncher.CodeCliScript(Path.Combine(directory, "Code.exe")));
+    }
+
+    [Fact]
+    public void ScoutDetectionRequiresAnInstalledExecutableButNotARunningProcess()
+    {
+        Assert.Null(ReviewLauncher.ScoutExecutable(directory));
+        var installDirectory = Path.Combine(directory, "Microsoft Scout");
+        Directory.CreateDirectory(installDirectory);
+        Assert.Null(ReviewLauncher.ScoutExecutable(directory));
+        File.WriteAllText(Path.Combine(installDirectory, "unrelated.exe"), "");
+        Assert.Null(ReviewLauncher.ScoutExecutable(directory));
+        var executable = Path.Combine(installDirectory, "scout.exe");
+        File.WriteAllText(executable, "");
+        Assert.Equal(executable, ReviewLauncher.ScoutExecutable(directory));
+        File.Delete(executable);
+        Assert.Null(ReviewLauncher.ScoutExecutable(directory));
+    }
+
+    private static void VerifyScoutAccessibilityHandoff()
+    {
+        var newChat = new System.Windows.Controls.Button { Content = "New chat" };
+        var message = new System.Windows.Controls.TextBox { Text = "\n" };
+        System.Windows.Automation.AutomationProperties.SetName(message, "Message");
+        var send = new System.Windows.Controls.Button { Content = "Send" };
+        var stop = new System.Windows.Controls.Button { Content = "Stop", Visibility = System.Windows.Visibility.Collapsed };
+        var panel = new System.Windows.Controls.StackPanel();
+        panel.Children.Add(newChat); panel.Children.Add(message); panel.Children.Add(send); panel.Children.Add(stop);
+        var window = new System.Windows.Window { Title = "Synthetic Scout controls", Content = panel, Width = 400, Height = 250 };
+        const string prompt = "Review PR: https://dev.azure.com/org/project/_git/repo/pullrequest/42\n\nCheck correctness.";
+        var created = 0;
+        var submitted = 0;
+        newChat.Click += (_, _) => { created++; message.Text = "\n"; };
+        send.Click += (_, _) =>
+        {
+            Assert.Equal(prompt, message.Text);
+            submitted++;
+            message.Text = "\n";
+            stop.Visibility = System.Windows.Visibility.Visible;
+        };
+        window.Show();
+        try
+        {
+            var handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var task = Task.Run(() =>
+            {
+                var root = System.Windows.Automation.AutomationElement.FromHandle(handle);
+                return ScoutReviewAutomation.StartAsync(new WindowsScoutControls(root), prompt, timeout.Token);
+            });
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            var pump = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
+            pump.Tick += (_, _) => { if (task.IsCompleted) frame.Continue = false; };
+            pump.Start();
+            try { System.Windows.Threading.Dispatcher.PushFrame(frame); }
+            finally { pump.Stop(); }
+            task.GetAwaiter().GetResult();
+            Assert.Equal(1, created);
+            Assert.Equal(1, submitted);
+        }
+        finally { window.Close(); }
     }
 
     [Fact]
