@@ -56,7 +56,7 @@ public sealed class PrivateDiagnostics(string directory)
     private static readonly HashSet<string> Events = ["requestStarted", "requestFinished", "refreshStarted", "refreshFinished",
         "refreshFailed", "refreshCancelled", "startup", "settingsSaved", "actionFailed", "actionFinished", "settingsFailed"];
     private static readonly HashSet<string> Operations = ["identity", "followedIdentity", "projects", "reviews",
-        "reviewHistory", "reviewerPolicies", "application", "settings", "copilot", "edge", "browser", "startup", "shortcut", "diagnostics"];
+        "reviewHistory", "reviewerPolicies", "application", "settings", "copilot", "scout", "edge", "browser", "startup", "shortcut", "diagnostics"];
     private static readonly HashSet<string> Outcomes = ["success", "httpFailure", "cancelled", "network", "invalidResponse", "system"];
     public void Write(DiagnosticRecord record)
     {
@@ -387,6 +387,27 @@ public sealed class WindowsAuthorization(IPatStore patStore) : IAuthorizationPro
 
 public static class ReviewLauncher
 {
+    public static Task ScoutAsync(Uri url, string instructions, CancellationToken ct)
+    {
+        var prompt = ReviewPrompt.Compose(url, instructions);
+        var executable = FindScout() ?? throw new ReviewException("Install Microsoft Scout, sign in, then try again.");
+        return ScoutReviewAutomation.LaunchAsync(executable, prompt, ct);
+    }
+
+    public static string? FindScout() => new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs"),
+        Environment.GetEnvironmentVariable("ProgramW6432") ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+    }.Select(ScoutExecutable).FirstOrDefault(executable => executable is not null);
+
+    public static string? ScoutExecutable(string programsDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(programsDirectory);
+        var executable = Path.Combine(programsDirectory, "Microsoft Scout", "scout.exe");
+        return File.Exists(executable) ? executable : null;
+    }
+
     public static void Browser(Uri url, bool edge)
     {
         ReviewPrompt.ValidateUrl(url);

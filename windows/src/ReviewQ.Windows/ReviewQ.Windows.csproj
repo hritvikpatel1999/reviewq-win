@@ -12,6 +12,7 @@
     <RootNamespace>ReviewQ.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets\*.png" />
     <ProjectReference Include="..\ReviewQ.Core\ReviewQ.Core.csproj" />
     <None Include="..\..\packaging\ReviewQ.ico" Link="ReviewQ.ico" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\packaging\ReviewQ.ico')" />
   </ItemGroup>

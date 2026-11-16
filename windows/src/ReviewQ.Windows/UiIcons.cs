@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Path = System.Windows.Shapes.Path;
 
@@ -10,8 +11,22 @@ namespace ReviewQ.Windows;
 
 public static class UiIcons
 {
+    private static readonly IReadOnlyDictionary<string, BitmapSource> Artwork =
+        new[] { "edge", "scout", "copilot" }.ToDictionary(name => name, name =>
+        {
+            var image = new BitmapImage(new Uri($"pack://application:,,,/ReviewQ;component/Assets/{name}.png"));
+            image.Freeze();
+            return (BitmapSource)image;
+        });
+
     public static FrameworkElement Create(string name, double size = 20, bool accent = false)
     {
+        if (!SystemParameters.HighContrast && Artwork.TryGetValue(name, out var image))
+        {
+            var icon = new Image { Source = image, Width = size, Height = size, Stretch = Stretch.Uniform, IsHitTestVisible = false };
+            RenderOptions.SetBitmapScalingMode(icon, BitmapScalingMode.HighQuality);
+            return icon;
+        }
         var geometry = name switch
         {
             "repository" => "M6,8 L6,18 M18,8 L18,10 C18,14 6,12 6,16 M3,5 A3,3 0 1 0 9,5 A3,3 0 1 0 3,5 M15,5 A3,3 0 1 0 21,5 A3,3 0 1 0 15,5 M3,21 A3,3 0 1 0 9,21 A3,3 0 1 0 3,21",
@@ -25,6 +40,10 @@ public static class UiIcons
             "edge" => "M1,12 A11,11 0 1 0 23,12 A11,11 0 1 0 1,12 M1,12 L23,12 M12,1 C3,5 3,19 12,23 C21,19 21,5 12,1",
             "copilot" => "M5,7 C5,1 19,1 19,7 M3,7 L21,7 L23,16 L18,22 L6,22 L1,16 Z M4,10 L10,10 L10,15 L4,15 Z M14,10 L20,10 L20,15 L14,15 Z M9,19 L15,19",
             "scout" => "M12,1 C12,8 8,12 1,12 C8,12 12,16 12,23 C12,16 16,12 23,12 C16,12 12,8 12,1 Z",
+            "code" => "M8,5 L1,12 L8,19 M16,5 L23,12 L16,19 M14,2 L10,22",
+            "sources" => "M3,23 L3,2 L14,2 L14,23 M14,9 L21,9 L21,23 M7,6 L7,8 M10,6 L10,8 M7,12 L7,14 M10,12 L10,14 M7,18 L7,20 M10,18 L10,20 M17,12 L18,12 M17,17 L18,17 M1,23 L23,23",
+            "refresh" => "M20,8 A9,9 0 1 0 21,16 M20,1 L20,8 L13,8",
+            "success" => "M12,1 A11,11 0 1 0 12,23 A11,11 0 1 0 12,1 M6,12 L10,16 L18,8",
             _ => throw new ArgumentOutOfRangeException(nameof(name))
         };
         var path = new Path
@@ -33,7 +52,8 @@ public static class UiIcons
             StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round,
             Stretch = Stretch.Uniform, Width = size, Height = size, IsHitTestVisible = false
         };
-        if (accent && !SystemParameters.HighContrast) path.Stroke = Brushes.DodgerBlue;
+        if (name == "success" && !SystemParameters.HighContrast) path.Stroke = Brushes.SeaGreen;
+        else if (accent && !SystemParameters.HighContrast) path.Stroke = Brushes.DodgerBlue;
         else path.SetBinding(Shape.StrokeProperty, new Binding
         {
             Path = new PropertyPath(TextElement.ForegroundProperty),

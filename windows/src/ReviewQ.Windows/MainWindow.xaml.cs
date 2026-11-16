@@ -129,9 +129,9 @@ public partial class MainWindow : Window
         actions.Children.Add(edge);
         if (item.Queue != QueueKind.Authored)
         {
-            var scout = ActionButton("scout", "Scout unavailable: a reliable Windows integration has not been verified.");
-            scout.IsEnabled = false;
-            ToolTipService.SetShowOnDisabled(scout, true);
+            var scout = ActionButton("scout", "Start a new Scout review chat");
+            scout.Click += async (_, _) => await app.RunActionAsync("scout",
+                () => ReviewLauncher.ScoutAsync(item.Url, controller.Settings.ScoutAdditionalInstructions, app.Lifetime));
             actions.Children.Add(scout);
             var copilot = ActionButton("copilot", "Start a new VS Code Copilot agent chat");
             copilot.Click += async (_, _) => await app.RunActionAsync("copilot", () => ReviewLauncher.CopilotAsync(item.Url, controller.Settings.CopilotAdditionalInstructions, app.Lifetime));

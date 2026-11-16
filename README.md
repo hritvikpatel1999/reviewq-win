@@ -19,9 +19,9 @@ Requires **Windows 11 22H2 or newer**. Choose the appropriate architecture:
 
 | Package | Recommended use |
 |---|---|
-| `ReviewQ-3.1.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
-| `ReviewQ-3.1.0-win-arm64-setup.exe` | Windows on ARM |
-| `ReviewQ-3.1.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
+| `ReviewQ-3.2.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
+| `ReviewQ-3.2.0-win-arm64-setup.exe` | Windows on ARM |
+| `ReviewQ-3.2.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
 
 Matching portable ZIPs are also provided. Extract the **entire ZIP** before
 opening `ReviewQ.exe`; no separate .NET runtime is required.
@@ -56,8 +56,9 @@ edition; the x86 package is a compatibility build, not support for legacy Window
   Use **Run Setup** in the queue footer or tray menu to replay it.
 
 ReviewQ **reads** Azure DevOps. It does not vote, comment, merge, or modify PRs.
-GitHub PR integration is not included. Scout remains disabled because a reliable
-Windows integration has not been verified.
+GitHub PR integration is not included. Scout review handoff uses Windows
+accessibility controls to start a new chat and verify the prompt before sending;
+existing drafts are never overwritten.
 
 ## First launch
 
@@ -143,7 +144,8 @@ to 2 MiB and 4,096 PRs. Oversized queues are not partially cached. Saving Settin
 or removing the PAT clears the prior cache; Settings also offers manual clearing.
 Neither this cache nor setup progress is included in diagnostic exports.
 
-Read [release notes and parity details](docs/windows-release-v3.1.0.md).
+Read the [3.2.0 release notes](docs/windows-release-v3.2.0.md) and
+[3.1.0 parity details](docs/windows-release-v3.1.0.md).
 Exhaustive accessibility/high-contrast/DPI acceptance remains to be verified.
 A **Merge Ready** label is not a guarantee of build,
 conflict, or every completion-policy requirement.
