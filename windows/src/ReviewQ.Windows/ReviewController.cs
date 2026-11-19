@@ -12,6 +12,8 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
     private CancellationTokenSource? polling;
     private long revision;
     private readonly ReviewQueueCache? cache;
+    private readonly ArchiveStore? archives;
+    private ReviewSnapshot? previousSnapshot;
     public event PropertyChangedEventHandler? PropertyChanged;
     public ReviewSettings Settings { get; private set; }
     public ReviewSnapshot? Snapshot { get; private set; }
@@ -20,9 +22,40 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
     public string? CacheWarning { get; private set; }
     public bool IsCached { get; private set; }
     public ReviewChanges Changes { get; private set; } = new();
+    public string? ArchiveError { get; private set; }
+    public IReadOnlyList<ReviewItem> ActiveItems
+    {
+        get { var ids = ArchivedIds; return Snapshot?.Items.Where(x => !ids.Contains(x.Id)).ToArray() ?? []; }
+    }
+    public IReadOnlyList<ReviewItem> ArchivedItems
+    {
+        get { var ids = ArchivedIds; return Snapshot?.Items.Where(x => ids.Contains(x.Id))
+            .OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id, StringComparer.Ordinal).ToArray() ?? []; }
+    }
+    public int PendingCount => ActiveItems.Count(x => x.Queue == QueueKind.Assigned);
+    private IReadOnlySet<string> ArchivedIds => archives?.Ids(Snapshot?.IdentityScope) ?? new HashSet<string>();
     public ReviewController(ReviewSettings settings, IReviewLoader loader, Action<DiagnosticRecord> log,
-        ReviewQueueCache? cache = null)
-    { Settings = settings; this.loader = loader; this.log = log; this.cache = cache; }
+        ReviewQueueCache? cache = null, ArchiveStore? archives = null)
+    {
+        Settings = settings; this.loader = loader; this.log = log; this.cache = cache; this.archives = archives;
+        ArchiveError = archives?.Error;
+        if (ArchiveError is not null) Log(new("archiveStateInvalidated", "archives", Outcome: "invalidResponse"));
+    }
+    public void SetArchived(ReviewItem item, bool archived)
+    {
+        try
+        {
+            if (archives is null || Snapshot is null) throw new ReviewException("Refresh an authenticated queue before archiving PRs.");
+            archives.Set(Snapshot, item, archived);
+            ArchiveError = null;
+            RecomputeChanges();
+            Log(new(archived ? "reviewArchived" : "reviewRestored", "archives", Outcome: "success"));
+        }
+        catch (Exception ex) when (UiErrors.IsExpected(ex))
+        { ArchiveError = UiErrors.Message(ex); Log(DiagnosticRecord.Failure("archiveChangeFailed", "archives", ex)); }
+        Changed();
+    }
+    private void RecomputeChanges() => Changes = new(previousSnapshot, Snapshot, ArchivedIds);
     public void Report(string message) { Error = message; Changed(); }
     public void Start(bool refreshImmediately = true)
     {
@@ -59,7 +92,7 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
             {
                 if (current != revision || ct.IsCancellationRequested) return;
                 if (Snapshot is not null && Snapshot.IdentityScope != scope)
-                { Snapshot = null; Changes = new(); IsCached = false; Changed(); }
+                { Snapshot = null; previousSnapshot = null; Changes = new(); IsCached = false; Changed(); }
                 if (Snapshot is null && cache is not null)
                 {
                     try
@@ -76,8 +109,9 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
                 ? await scoped.LoadAsync(Settings with { }, ct, Authenticated)
                 : await loader.LoadAsync(Settings with { }, ct);
             if (current != revision || ct.IsCancellationRequested) return;
-            Changes = new(Snapshot, snapshot);
+            previousSnapshot = Snapshot;
             Snapshot = snapshot;
+            RecomputeChanges();
             IsCached = false;
             Error = null;
             if (cache is not null)
@@ -97,7 +131,7 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
         catch (Exception ex) when (UiErrors.IsExpected(ex))
         {
             if (current == revision) Error = UiErrors.Message(ex);
-            Log(new("refreshFailed", "reviews", Outcome: "system"));
+            Log(DiagnosticRecord.Failure("refreshFailed", "reviews", ex));
         }
         catch (Exception)
         {
@@ -120,6 +154,7 @@ public sealed class ReviewController : INotifyPropertyChanged, IDisposable
         IsRefreshing = false;
         Settings = settings;
         Snapshot = verifiedSnapshot;
+        previousSnapshot = null;
         Error = null;
         IsCached = false;
         Changes = new();

@@ -11,7 +11,7 @@
      <ControlTemplate TargetType="RadioButton">
       <Border x:Name="Segment" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}"
        BorderBrush="Transparent" BorderThickness="1">
-       <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/>
+       <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" RecognizesAccessKey="True"/>
       </Border>
       <ControlTemplate.Triggers>
        <Trigger Property="IsChecked" Value="True">
@@ -80,6 +80,118 @@
    <Style.Triggers>
     <DataTrigger Binding="{Binding Source={x:Static SystemParameters.HighContrast}}" Value="True">
      <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+    </DataTrigger>
+   </Style.Triggers>
+  </Style>
+  <Style x:Key="SettingsInput" TargetType="TextBox">
+   <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Window}}"/>
+   <Setter Property="Padding" Value="10,7"/>
+   <Setter Property="Margin" Value="0,3,0,10"/>
+   <Setter Property="MinHeight" Value="34"/>
+   <Setter Property="Background" Value="#10000000"/>
+   <Setter Property="BorderBrush" Value="#30808080"/>
+   <Setter Property="BorderThickness" Value="1"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="TextBox">
+      <Border x:Name="Input" CornerRadius="7" Background="{TemplateBinding Background}"
+       BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+       <ScrollViewer x:Name="PART_ContentHost"/>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property="IsKeyboardFocused" Value="True">
+        <Setter TargetName="Input" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+       </Trigger>
+       <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Input" Property="Opacity" Value="0.5"/></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+   <Style.Triggers>
+    <DataTrigger Binding="{Binding Source={x:Static SystemParameters.HighContrast}}" Value="True">
+     <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+     <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+     <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+    </DataTrigger>
+   </Style.Triggers>
+  </Style>
+  <Style x:Key="SettingsCard" TargetType="Border">
+   <Setter Property="CornerRadius" Value="14"/>
+   <Setter Property="Padding" Value="18"/>
+   <Setter Property="Background" Value="#14808080"/>
+   <Setter Property="BorderBrush" Value="Transparent"/>
+   <Setter Property="BorderThickness" Value="1"/>
+   <Style.Triggers>
+    <DataTrigger Binding="{Binding Source={x:Static SystemParameters.HighContrast}}" Value="True">
+     <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+     <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+    </DataTrigger>
+   </Style.Triggers>
+  </Style>
+  <Style x:Key="SettingsButton" TargetType="Button">
+   <Setter Property="Padding" Value="12,6"/>
+   <Setter Property="MinHeight" Value="32"/>
+   <Setter Property="Margin" Value="0"/>
+   <Setter Property="Background" Value="#20808080"/>
+   <Setter Property="BorderBrush" Value="Transparent"/>
+   <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Window}}"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="Button">
+      <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="7"
+       BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" Padding="{TemplateBinding Padding}">
+       <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.8"/></Trigger>
+       <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.6"/></Trigger>
+       <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/></Trigger>
+       <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.4"/></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+   <Style.Triggers>
+    <DataTrigger Binding="{Binding Source={x:Static SystemParameters.HighContrast}}" Value="True">
+     <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"/>
+     <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>
+     <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>
+    </DataTrigger>
+   </Style.Triggers>
+  </Style>
+  <Style x:Key="SettingsPrimaryButton" TargetType="Button" BasedOn="{StaticResource SettingsButton}">
+   <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+   <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+   <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style x:Key="SettingsDay" TargetType="CheckBox">
+   <Setter Property="MinWidth" Value="44"/>
+   <Setter Property="Padding" Value="8,5"/>
+   <Setter Property="Margin" Value="0,0,6,6"/>
+   <Setter Property="Background" Value="#20808080"/>
+   <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Window}}"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="CheckBox">
+      <Border x:Name="Day" Background="{TemplateBinding Background}" CornerRadius="6"
+       BorderBrush="Transparent" BorderThickness="1" Padding="{TemplateBinding Padding}">
+       <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property="IsChecked" Value="True">
+        <Setter TargetName="Day" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+        <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+       </Trigger>
+       <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Day" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/></Trigger>
+       <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Day" Property="Opacity" Value="0.8"/></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+   <Style.Triggers>
+    <DataTrigger Binding="{Binding Source={x:Static SystemParameters.HighContrast}}" Value="True">
+     <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"/>
+     <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>
     </DataTrigger>
    </Style.Triggers>
   </Style>

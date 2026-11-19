@@ -8,7 +8,15 @@ public interface IAuthorizationProvider
     Task<AuthorizationSession> GetAsync(ReviewSettings settings, CancellationToken cancellationToken);
     void Invalidate();
 }
-public record DiagnosticRecord(string Event, string Operation, int? Status = null, long? DurationMs = null, string? Outcome = null);
+public record DiagnosticRecord(string Event, string Operation, int? Status = null, long? DurationMs = null, string? Outcome = null,
+    int? SystemCode = null, int? CliExitCode = null)
+{
+    public static DiagnosticRecord Failure(string name, string operation, Exception error, long? durationMs = null) =>
+        new(name, operation, DurationMs: durationMs, Outcome: error is HttpRequestException ? "network" : "system",
+            SystemCode: error is ReviewException review ? review.SystemCode :
+                error is System.ComponentModel.Win32Exception native ? native.NativeErrorCode : error.HResult,
+            CliExitCode: (error as ReviewException)?.CliExitCode);
+}
 public enum QueueKind { Assigned, Followed, Authored }
 public sealed record ReviewItem
 {

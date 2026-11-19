@@ -347,6 +347,8 @@ public sealed class SetupWindow : Window
         Separator(card);
         Check(card, "Launch ReviewQ at Windows sign-in", session.Draft.StartAtLogin, value => session.Edit(session.Draft with { StartAtLogin = value }));
         Text(card, "Global shortcut (blank disables)", session.Draft.GlobalShortcut, value => session.Edit(session.Draft with { GlobalShortcut = value }));
+        card.Children.Add(new ReminderEditor(app, session.Draft.Reminders,
+            configuration => session.Edit(session.Draft with { Reminders = configuration })));
     }
 
     private void Ready()

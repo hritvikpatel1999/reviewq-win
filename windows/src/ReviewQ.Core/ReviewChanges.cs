@@ -11,7 +11,7 @@ public sealed class ReviewChanges
     public bool Followed { get; private set; }
     public bool Authored { get; private set; }
     public bool HasChanges => ItemIds.Count > 0 || RepositoryKeys.Count > 0 || Followed || Authored;
-    public ReviewChanges(ReviewSnapshot? previous = null, ReviewSnapshot? current = null)
+    public ReviewChanges(ReviewSnapshot? previous = null, ReviewSnapshot? current = null, IReadOnlySet<string>? excluding = null)
     {
         var ids = new HashSet<string>();
         var groups = new HashSet<string>();
@@ -23,8 +23,8 @@ public sealed class ReviewChanges
         }
         if (previous is not null && current is not null && previous.IdentityScope == current.IdentityScope)
         {
-            var remaining = previous.Items.ToDictionary(x => x.Id);
-            foreach (var item in current.Items)
+            var remaining = previous.Items.Where(x => excluding?.Contains(x.Id) != true).ToDictionary(x => x.Id);
+            foreach (var item in current.Items.Where(x => excluding?.Contains(x.Id) != true))
             {
                 remaining.Remove(item.Id, out var old);
                 if (old == item) continue;
