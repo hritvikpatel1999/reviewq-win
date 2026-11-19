@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "3.2.0"
+  #define AppVersion "4.0.0"
 #endif
 #ifndef Architecture
   #define Architecture "x64"
@@ -47,6 +47,18 @@ Name: "{group}\ReviewQ"; Filename: "{app}\ReviewQ.exe"
 Filename: "{app}\ReviewQ.exe"; Description: "Open ReviewQ"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function InitializeUninstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{app}\ReviewQ.exe'), '--remove-reminder-registration', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Result then Result := ResultCode = 0;
+  if not Result then
+    MsgBox('ReviewQ could not remove its reminder registration. Close ReviewQ, check Task Scheduler permissions, and try uninstalling again. Your saved settings are retained.',
+      mbError, MB_OK);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Command: String;

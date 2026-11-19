@@ -19,7 +19,10 @@ public sealed class SetupProgressStore(string directory)
             if (stored is null || stored.Version != 1 || !Enum.IsDefined(stored.Step) || stored.Draft is null ||
                 stored.Draft.SourceUrls is null || stored.Draft.TenantId is null || stored.Draft.FollowedAuthorEmails is null ||
                 stored.Draft.GlobalShortcut is null || stored.Draft.CopilotAdditionalInstructions is null ||
-                stored.Draft.ScoutAdditionalInstructions is null || !Enum.IsDefined(stored.Draft.Authentication))
+                stored.Draft.ScoutAdditionalInstructions is null || stored.Draft.Reminders is null ||
+                stored.Draft.Reminders.Times is null || stored.Draft.Reminders.Weekdays is null ||
+                stored.Draft.Reminders.Times.Length > 8 || stored.Draft.Reminders.Times.Any(x => x is null) ||
+                !Enum.IsDefined(stored.Draft.Authentication))
                 throw Corrupt();
             return (stored.Step > SetupStep.Authentication ? SetupStep.Authentication : stored.Step, stored.Draft);
         }
@@ -163,7 +166,7 @@ public sealed class SetupSession : IDisposable
         catch (Exception ex) when (UiErrors.IsExpected(ex))
         {
             if (current == revision) { Invalidate(); Report(ex); }
-            log(new("refreshFailed", "reviews", Outcome: "system"));
+            log(DiagnosticRecord.Failure("refreshFailed", "reviews", ex));
         }
         finally
         {
@@ -212,7 +215,7 @@ public sealed class SetupSession : IDisposable
     private void Report(Exception ex)
     {
         Error = UiErrors.Message(ex);
-        log(new("settingsFailed", "settings", Outcome: "system"));
+        log(DiagnosticRecord.Failure("settingsFailed", "settings", ex));
     }
     public void Dispose() { check.Cancel(); check.Dispose(); token = ""; }
 }

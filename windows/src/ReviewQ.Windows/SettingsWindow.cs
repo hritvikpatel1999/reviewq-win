@@ -10,10 +10,10 @@ namespace ReviewQ.Windows;
 
 public sealed class SettingsWindow : Window
 {
-    private readonly TextBox sources = Multiline(90), tenant = new(), emails = new(), shortcut = new();
-    private readonly TextBox copilot = Multiline(90), scout = Multiline(70);
+    private readonly TextBox sources = Multiline(118), tenant = new(), emails = new(), shortcut = new();
+    private readonly TextBox copilot = Multiline(100), scout = Multiline(100);
     private readonly PasswordBox pat = new() { Padding = new(6), Margin = new(0, 3, 0, 10) };
-    private readonly ComboBox auth = new() { ItemsSource = Enum.GetValues<AuthenticationMethod>(), Margin = new(0, 3, 0, 10) };
+    private AuthenticationMethod authentication;
     private readonly ComboBox interval = new() { ItemsSource = new[] { 1, 5, 15, 30 }, Margin = new(0, 3, 0, 10) };
     private readonly CheckBox drafts = new() { Content = "Include draft pull requests" };
     private readonly CheckBox count = new() { Content = "Show pending count in window title" };
@@ -21,71 +21,192 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox authored = new() { Content = "Show PRs I've authored" };
     private readonly CheckBox startup = new() { Content = "Start ReviewQ at sign-in (in the background)" };
     private readonly TextBlock validation = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0, 6, 0, 6) };
-    private readonly TextBlock counts = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock copilotCount = Note(""), scoutCount = Note("");
     private readonly Button save = new() { Content = "_Save and Refresh", IsDefault = true };
     private readonly App app;
     private readonly ReviewSettings original;
-    public SettingsWindow(App app, ReviewSettings settings)
+    private readonly UpdateStore? updates;
+    private readonly ReminderEditor reminders;
+    private readonly TextBlock updateStatus = Note("");
+    private readonly Button checkUpdates = new() { Content = "Check for Updates", HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly Button viewUpdates = new() { Content = "View Updates", HorizontalAlignment = HorizontalAlignment.Left };
+    public SettingsWindow(App app, ReviewSettings settings, UpdateStore? updates = null)
     {
         this.app = app;
         original = settings;
+        this.updates = updates ?? app.Updates;
         Title = "ReviewQ Settings";
+        FontSize = 14;
+        Resources.Add(typeof(TextBox), FindResource("SettingsInput"));
 #pragma warning disable WPF0001 // Use the same built-in system theme as the queue window.
         ThemeMode = ThemeMode.System;
 #pragma warning restore WPF0001
-        Width = 580; Height = 780; MinWidth = 440; MinHeight = 400;
+        Width = Math.Min(640, SystemParameters.WorkArea.Width - 40);
+        Height = Math.Min(820, SystemParameters.WorkArea.Height - 40);
+        MinWidth = 440; MinHeight = 400;
+        UseLayoutRounding = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        var root = new DockPanel { Margin = new(20) };
+        var root = new DockPanel();
         var footer = new StackPanel();
-        footer.Children.Add(validation); footer.Children.Add(save);
-        DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
-        var form = new StackPanel();
-        root.Children.Add(new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        validation.Margin = new(0, 0, 0, 6);
+        AutomationProperties.SetLiveSetting(validation, AutomationLiveSetting.Polite);
+        footer.Children.Add(validation);
+        var navigation = new Grid();
+        navigation.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        navigation.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        navigation.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        var diagnostics = Button("Diagnostics...");
+        diagnostics.Click += (_, _) => app.ShowDiagnostics();
+        navigation.Children.Add(diagnostics);
+        save.SetResourceReference(StyleProperty, "SettingsPrimaryButton");
+        AutomationProperties.SetName(save, "Save and Refresh");
+        Grid.SetColumn(save, 2); navigation.Children.Add(save);
+        footer.Children.Add(navigation);
+        var footerSurface = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromArgb(40, 128, 128, 128)), BorderThickness = new(0, 1, 0, 0),
+            Padding = new(20, 10, 20, 14), Child = footer
+        };
+        DockPanel.SetDock(footerSurface, Dock.Bottom); root.Children.Add(footerSurface);
+        var form = new StackPanel { Margin = new(26, 22, 26, 20) };
+        root.Children.Add(new ScrollViewer
+        {
+            Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalContentAlignment = HorizontalAlignment.Stretch
+        });
         Content = root;
-        form.Children.Add(new TextBlock { Text = "Azure DevOps", FontSize = 23, FontWeight = FontWeights.SemiBold });
-        Add(form, "Organization/project URLs (one per line)", sources);
-        form.Children.Add(Note("Example: https://dev.azure.com/your-organization/your-project"));
-        Add(form, "Authentication", auth);
-        form.Children.Add(Note("Azure CLI: install it separately, then run az login --allow-no-subscriptions. A PAT does not need Azure CLI."));
-        Add(form, "Optional Entra tenant GUID or domain", tenant);
-        Add(form, "New PAT (Code: Read; blank keeps the saved token)", pat);
-        var remove = new Button { Content = "Remove saved PAT", HorizontalAlignment = HorizontalAlignment.Left };
+        var heading = new DockPanel { Margin = new(2, 0, 0, 2) };
+        var icon = UiIcons.Create("app", 34, true);
+        icon.Margin = new(0, 0, 16, 0); DockPanel.SetDock(icon, Dock.Left); heading.Children.Add(icon);
+        var titles = new StackPanel();
+        titles.Children.Add(new TextBlock { Text = "Azure DevOps reviews", FontSize = 23, FontWeight = FontWeights.SemiBold });
+        titles.Children.Add(Note("A quiet home for your next pull request."));
+        heading.Children.Add(titles); form.Children.Add(heading);
+
+        var sourceSection = Section(form, "sources", "Review sources");
+        sourceSection.Children.Add(Note("One organization or project URL per line."));
+        sources.FontFamily = new FontFamily("Consolas");
+        Add(sourceSection, "Organization/project URLs (one per line)", sources, false);
+        sourceSection.Children.Add(Note("Organization-only URLs search all accessible projects. Project URLs are faster for large organizations."));
+
+        var authenticationSection = Section(form, "key", "Authentication");
+        var segments = new Grid { Margin = new(0, 0, 0, 8) };
+        segments.ColumnDefinitions.Add(new()); segments.ColumnDefinitions.Add(new());
+        var cli = new RadioButton { Content = "Azure CLI", GroupName = "SettingsAuthentication", HorizontalContentAlignment = HorizontalAlignment.Center };
+        var token = new RadioButton { Content = "Personal access token", GroupName = "SettingsAuthentication", HorizontalContentAlignment = HorizontalAlignment.Center };
+        cli.SetResourceReference(StyleProperty, "SetupSegment"); token.SetResourceReference(StyleProperty, "SetupSegment");
+        AutomationProperties.SetName(cli, "Azure CLI"); AutomationProperties.SetName(token, "Personal access token");
+        segments.Children.Add(cli); Grid.SetColumn(token, 1); segments.Children.Add(token);
+        authenticationSection.Children.Add(segments);
+        var cliFields = new StackPanel();
+        cliFields.Children.Add(Note("Sign in once in Terminal; ReviewQ uses short-lived Entra tokens."));
+        cliFields.Children.Add(new TextBlock { Text = "az login --allow-no-subscriptions", FontFamily = new FontFamily("Consolas"), Margin = new(0, 4, 0, 8) });
+        Add(cliFields, "Tenant ID or domain (optional)", tenant);
+        cliFields.Children.Add(Note("Leave the tenant blank to use your current Azure CLI account."));
+        authenticationSection.Children.Add(cliFields);
+        var patFields = new StackPanel();
+        patFields.Children.Add(Note("Use a PAT with Code (Read) and access to your projects. It is stored in Windows Credential Manager, not settings."));
+        Add(patFields, "New PAT (blank keeps the saved token)", pat);
+        AutomationProperties.SetLiveSetting(updateStatus, AutomationLiveSetting.Polite);
+        var remove = Button("Remove saved PAT");
         remove.Click += async (_, _) => await app.RunActionAsync("settings", async () =>
         {
             if (MessageBox.Show(this, "Remove the saved PAT from Windows Credential Manager?", "Remove PAT",
                     MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             { await app.RemoveSavedPatAsync(); validation.Text = "Saved PAT and prior startup queue removed."; }
         });
-        form.Children.Add(remove);
-        Add(form, "Refresh interval (minutes)", interval);
-        foreach (var control in new[] { drafts, count, follow }) form.Children.Add(control);
-        Add(form, "Followed-author emails (semicolon separated, without spaces)", emails);
-        form.Children.Add(authored);
-        form.Children.Add(Note("Merge Ready checks reviewer approvals and discussion resolution only, not builds or all merge policies."));
-        form.Children.Add(startup);
-        Add(form, "Global shortcut (blank disables; e.g. Ctrl+Alt+Q)", shortcut);
-        var retry = new Button { Content = "Retry saved shortcut", HorizontalAlignment = HorizontalAlignment.Left };
+        patFields.Children.Add(remove); authenticationSection.Children.Add(patFields);
+        void SelectAuthentication(AuthenticationMethod method)
+        {
+            authentication = method;
+            cliFields.Visibility = method == AuthenticationMethod.AzureCli ? Visibility.Visible : Visibility.Collapsed;
+            patFields.Visibility = method == AuthenticationMethod.PersonalAccessToken ? Visibility.Visible : Visibility.Collapsed;
+        }
+        cli.Checked += (_, _) => SelectAuthentication(AuthenticationMethod.AzureCli);
+        token.Checked += (_, _) => SelectAuthentication(AuthenticationMethod.PersonalAccessToken);
+        authentication = settings.Authentication;
+        cli.IsChecked = authentication == AuthenticationMethod.AzureCli;
+        token.IsChecked = authentication == AuthenticationMethod.PersonalAccessToken;
+
+        var people = Section(form, "people", "People you follow");
+        people.Children.Add(follow);
+        Add(people, "Followed-author emails", emails, false);
+        people.Children.Add(Note("Enter email addresses separated by semicolons, with no spaces."));
+        people.Children.Add(Note("Off by default. Adds active PRs by these authors across accessible projects in your configured organizations."));
+        people.Children.Add(Note("Adds read-only requests only when enabled. PATs also need Identity (Read) and Project and Team (Read). Emails stay local and go only to Azure DevOps to find authors."));
+        var authoredSection = Section(form, "author", "I'm the Author");
+        authoredSection.Children.Add(authored);
+        authoredSection.Children.Add(Note("Off by default. Shows your active PRs across accessible projects. The draft preference also applies."));
+        authoredSection.Children.Add(Note("Shows active discussion counts and Merge Ready for required approvals with no active comments, not builds or all merge policies. Browser actions only."));
+        authoredSection.Children.Add(Note("Adds read-only PR, discussion, and reviewer-policy requests only when enabled. PATs need Code (Read), Identity (Read), and Project and Team (Read)."));
+
+        var instructions = Section(form, "logs", "Review instructions");
+        var firstLine = Note("Always sent first: Review PR: {PR Link}"); firstLine.FontFamily = new FontFamily("Consolas");
+        instructions.Children.Add(firstLine);
+        Prompt(instructions, "Scout", scout, scoutCount);
+        Prompt(instructions, "GitHub Copilot", copilot, copilotCount);
+        instructions.Children.Add(Note("Stored locally in preferences, not encrypted. Do not enter secrets."));
+        instructions.Children.Add(Note("Scout starts a new chat and verifies the prompt before sending. Existing drafts are never overwritten."));
+
+        var reviewQueue = Section(form, "repository", "Review queue");
+        var refresh = new DockPanel();
+        var refreshLabel = new Label { Content = "Refresh", Target = interval, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 12, 0) };
+        DockPanel.SetDock(refreshLabel, Dock.Left); refresh.Children.Add(refreshLabel);
+        interval.ItemStringFormat = "Every {0} minutes"; interval.HorizontalAlignment = HorizontalAlignment.Left;
+        interval.MinWidth = 160; AutomationProperties.SetName(interval, "Refresh interval (minutes)");
+        refresh.Children.Add(interval); reviewQueue.Children.Add(refresh);
+        count.Content = "Show pending count in the taskbar and tray";
+        reviewQueue.Children.Add(count); reviewQueue.Children.Add(drafts);
+        reviewQueue.Children.Add(Note("Repository sections show active, directly assigned PRs with no vote from you. Followed and authored PRs appear in separate optional sections."));
+        reviewQueue.Children.Add(new Separator { Margin = new(0, 6, 0, 6) });
+        Add(reviewQueue, "Global shortcut (blank disables; e.g. Ctrl+Alt+Q)", shortcut);
+        var retry = Button("Retry saved shortcut");
         retry.Click += (_, _) => { try { app.RegisterShortcut(original.GlobalShortcut); validation.Text = "Saved shortcut registered."; } catch (Exception ex) when (UiErrors.IsExpected(ex)) { validation.Text = UiErrors.Message(ex); } };
-        form.Children.Add(retry);
-        var lookup = new Button { Content = "Re-lookup account and followed identities", HorizontalAlignment = HorizontalAlignment.Left };
+        reviewQueue.Children.Add(retry);
+        reviewQueue.Children.Add(Note("Drag ReviewQ beside the clock to keep its tray icon visible. Windows does not allow apps to force it out of overflow."));
+
+        reminders = new(app, settings.Reminders, _ => { });
+        form.Children.Add(reminders);
+        var startupSection = Section(form, "power", "Startup");
+        var startupText = (string)startup.Content;
+        startup.Content = new TextBlock { Text = startupText, TextWrapping = TextWrapping.Wrap };
+        AutomationProperties.SetName(startup, startupText);
+        startupSection.Children.Add(startup);
+        startupSection.Children.Add(Note("Starts quietly in the notification area when you sign in to Windows. Closing the queue keeps ReviewQ running; Quit ends it."));
+        var identity = Section(form, "people", "Identity cache");
+        identity.Children.Add(Note("Your identity and resolved followed authors are cached locally for seven days, including across restarts. No-match results expire after 15 minutes."));
+        identity.Children.Add(Note("PRs, votes, and comments are checked on every refresh. Ordinary refreshes reuse valid identities."));
+        var lookup = Button("Refresh identities");
         lookup.Click += async (_, _) => await app.RunActionAsync("settings", async () =>
         { await app.Controller.ApplyAsync(app.Controller.Settings, true); validation.Text = "Identity cache cleared; refreshing."; });
-        form.Children.Add(lookup);
-        var clearCache = new Button { Content = "Clear startup queue cache", HorizontalAlignment = HorizontalAlignment.Left };
+        identity.Children.Add(lookup);
+        var cache = Section(form, "folder", "Startup queue cache");
+        cache.Children.Add(Note("Local, unencrypted PR display data keeps the last queue visible while fresh data loads. It expires after seven days and holds at most 4,096 PRs / 2 MiB."));
+        cache.Children.Add(Note("Excluded from diagnostic exports. Saving Settings clears the old cache."));
+        var clearCache = Button("Clear startup queue cache");
         clearCache.Click += async (_, _) => await app.RunActionAsync("settings", () =>
         { app.Controller.ClearStartupCache(); validation.Text = "Startup queue cache cleared. The live queue is unchanged."; return Task.CompletedTask; });
-        form.Children.Add(clearCache);
-        form.Children.Add(Note("Startup cache: local, unencrypted PR display data. It expires after seven days, holds at most 4,096 PRs / 2 MiB, and is excluded from diagnostic exports. Saving Settings clears the old cache."));
-        form.Children.Add(new TextBlock { Text = "Review instructions", FontSize = 20, Margin = new(0, 15, 0, 8) });
-        form.Children.Add(Note("The first line is always Review PR: {PR Link}. Instructions are stored locally, not encrypted. Do not enter secrets."));
-        Add(form, "VS Code Copilot additional instructions", copilot);
-        Add(form, "Scout additional instructions", scout);
-        form.Children.Add(Note("Scout opens a new chat, verifies the review prompt, then sends it using Windows accessibility controls. Existing drafts are never overwritten; no clipboard or blind typing is used."));
-        form.Children.Add(counts);
-        form.Children.Add(Note("Visibility: ReviewQ cannot force its tray icon out of Windows overflow. Drag it beside the clock or change taskbar tray settings. You can manually pin ReviewQ to the taskbar."));
+        cache.Children.Add(clearCache);
+        var appUpdates = Section(form, "export", "App updates");
+        appUpdates.Children.Add(Note("Checks public Windows releases about once a day, independently of Azure DevOps. Updates are installed manually; nothing is downloaded or installed automatically."));
+        appUpdates.Children.Add(updateStatus);
+        var updateActions = new WrapPanel();
+        foreach (var button in new[] { checkUpdates, viewUpdates })
+        { button.SetResourceReference(StyleProperty, "SettingsButton"); button.Margin = new(0, 4, 8, 0); updateActions.Children.Add(button); }
+        checkUpdates.Click += async (_, _) =>
+        { if (this.updates is not null) await this.updates.CheckAsync(manually: true, ct: app.Lifetime); };
+        viewUpdates.Click += async (_, _) =>
+        {
+            if (this.updates?.AvailableUpdate is { } release)
+                await app.RunActionAsync("browser", () => { ReviewLauncher.OpenWeb(release.ReleaseUrl); return Task.CompletedTask; });
+        };
+        appUpdates.Children.Add(updateActions);
+        if (this.updates is not null) this.updates.Changed += RenderUpdates;
+        Closed += (_, _) => { if (this.updates is not null) this.updates.Changed -= RenderUpdates; };
+        RenderUpdates();
         sources.Text = settings.SourceUrls; tenant.Text = settings.TenantId; emails.Text = settings.FollowedAuthorEmails;
         shortcut.Text = settings.GlobalShortcut; copilot.Text = settings.CopilotAdditionalInstructions; scout.Text = settings.ScoutAdditionalInstructions;
-        auth.SelectedItem = settings.Authentication; interval.SelectedItem = settings.RefreshMinutes;
+        interval.SelectedItem = settings.RefreshMinutes;
         drafts.IsChecked = settings.IncludeDrafts; count.IsChecked = settings.ShowCount; follow.IsChecked = settings.FollowPeople;
         authored.IsChecked = settings.ShowAuthoredPullRequests; startup.IsChecked = settings.StartAtLogin;
         copilot.TextChanged += (_, _) => ValidatePrompts();
@@ -93,9 +214,22 @@ public sealed class SettingsWindow : Window
         save.Click += SaveClick;
         ValidatePrompts();
     }
+    private void RenderUpdates()
+    {
+        var version = updates?.CurrentVersion ?? "development build";
+        var result = updates?.AvailableUpdate is { } release ? $"ReviewQ v{release.Version} is available." :
+            updates?.LastCheckedAt is not null && updates.Error is null ? "You're up to date." : "";
+        updateStatus.Text = $"Installed: ReviewQ {version}\n" +
+            (updates?.IsChecking == true ? "Checking for ReviewQ updates...\n" : result + "\n") +
+            (updates?.LastCheckedAt is { } checkedAt ? $"Last successful check: {checkedAt.LocalDateTime:g}" : "Not checked yet.") +
+            (updates?.Error is { } error ? "\n" + error : "");
+        checkUpdates.IsEnabled = updates?.CurrentVersion is not null && !updates.IsChecking;
+        viewUpdates.Visibility = updates?.AvailableUpdate is null ? Visibility.Collapsed : Visibility.Visible;
+    }
     private void ValidatePrompts()
     {
-        counts.Text = $"Copilot: {ReviewPrompt.CharacterCount(copilot.Text):N0}/1,000 characters; Scout: {ReviewPrompt.CharacterCount(scout.Text):N0}/1,000 characters";
+        copilotCount.Text = $"{ReviewPrompt.CharacterCount(copilot.Text):N0} of 1,000 characters";
+        scoutCount.Text = $"{ReviewPrompt.CharacterCount(scout.Text):N0} of 1,000 characters";
         try { ReviewPrompt.Validate(copilot.Text); ReviewPrompt.Validate(scout.Text); save.IsEnabled = true; validation.Text = ""; }
         catch (ReviewException ex) { validation.Text = ex.Message; save.IsEnabled = false; }
     }
@@ -104,15 +238,15 @@ public sealed class SettingsWindow : Window
         save.IsEnabled = false;
         try
         {
-            if (auth.SelectedItem is not AuthenticationMethod method || interval.SelectedItem is not int minutes)
-                throw new ReviewException("Choose authentication and a refresh interval.");
+            if (interval.SelectedItem is not int minutes)
+                throw new ReviewException("Choose a refresh interval.");
             var settings = app.Controller.Settings with
             {
-                SourceUrls = sources.Text, TenantId = tenant.Text, Authentication = method, RefreshMinutes = minutes,
+                SourceUrls = sources.Text, TenantId = tenant.Text, Authentication = authentication, RefreshMinutes = minutes,
                 IncludeDrafts = drafts.IsChecked == true, ShowCount = count.IsChecked == true, FollowPeople = follow.IsChecked == true,
                 FollowedAuthorEmails = emails.Text, ShowAuthoredPullRequests = authored.IsChecked == true,
                 StartAtLogin = startup.IsChecked == true, GlobalShortcut = shortcut.Text.Trim(),
-                CopilotAdditionalInstructions = copilot.Text, ScoutAdditionalInstructions = scout.Text
+                CopilotAdditionalInstructions = copilot.Text, ScoutAdditionalInstructions = scout.Text, Reminders = reminders.Draft
             };
             settings.Validate();
             await app.SaveSettingsAsync(settings, pat.Password);
@@ -123,12 +257,42 @@ public sealed class SettingsWindow : Window
         finally { save.IsEnabled = true; }
     }
     private static TextBox Multiline(int height) => new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = height, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-    private static TextBlock Note(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, Opacity = 0.75, Margin = new(0, 4, 0, 10) };
-    private static void Add(Panel parent, string title, Control field)
+    private static TextBlock Note(string text) => new() { Text = text, FontSize = 12, TextWrapping = TextWrapping.Wrap, Opacity = 0.75, Margin = new(0, 4, 0, 10) };
+    private static void Add(Panel parent, string title, Control field, bool showLabel = true)
     {
-        parent.Children.Add(new Label { Content = title, Target = field, Padding = new(0, 6, 0, 0) });
+        if (showLabel) parent.Children.Add(new Label { Content = title, Target = field, Padding = new(0, 6, 0, 4) });
         System.Windows.Automation.AutomationProperties.SetName(field, title);
         parent.Children.Add(field);
+    }
+    private static Button Button(string title)
+    {
+        var button = new Button { Content = title, HorizontalAlignment = HorizontalAlignment.Left };
+        button.SetResourceReference(StyleProperty, "SettingsButton");
+        AutomationProperties.SetName(button, title);
+        return button;
+    }
+    private static StackPanel Section(Panel parent, string icon, string title)
+    {
+        var section = new StackPanel { Margin = new(0, 20, 0, 0) };
+        var header = UiIcons.Label(icon, title); header.Margin = new(4, 0, 0, 7); header.Opacity = 0.85;
+        ((TextBlock)header.Children[1]).FontWeight = FontWeights.SemiBold;
+        section.Children.Add(header);
+        var content = new StackPanel();
+        var card = new Border { Child = content, Tag = title };
+        card.SetResourceReference(StyleProperty, "SettingsCard");
+        section.Children.Add(card); parent.Children.Add(section);
+        return content;
+    }
+    private static void Prompt(Panel parent, string title, TextBox field, TextBlock counter)
+    {
+        var header = new DockPanel { Margin = new(0, 8, 0, 4) };
+        counter.FontSize = 11; counter.Margin = new(8, 0, 0, 0);
+        counter.VerticalAlignment = VerticalAlignment.Center;
+        DockPanel.SetDock(counter, Dock.Right); header.Children.Add(counter);
+        header.Children.Add(new Label { Content = title, Target = field, FontWeight = FontWeights.SemiBold, Padding = new(0) });
+        parent.Children.Add(header);
+        field.FontFamily = new FontFamily("Consolas");
+        Add(parent, title + " additional instructions", field, false);
     }
 }
 

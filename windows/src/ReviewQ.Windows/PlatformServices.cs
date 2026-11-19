@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using ReviewQ.Core;
@@ -17,19 +18,46 @@ public sealed class SettingsStore(string directory)
 {
     public string DirectoryPath { get; } = directory;
     public string FilePath => Path.Combine(DirectoryPath, "settings.json");
+    public string? LoadWarning { get; private set; }
     private sealed record Envelope(int Version, ReviewSettings Settings);
     public ReviewSettings Load()
     {
+        LoadWarning = null;
         if (!File.Exists(FilePath)) return new();
         try
         {
-            var envelope = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(FilePath));
+            var reminders = new SafeReminderConverter();
+            var options = new JsonSerializerOptions();
+            options.Converters.Add(reminders);
+            var envelope = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(FilePath), options);
             if (envelope is null || envelope.Version != 1 || envelope.Settings is null)
                 throw new ReviewException("Settings format is unsupported. Re-enter Settings and save.");
             envelope.Settings.Validate(false);
+            if (reminders.Invalid)
+                LoadWarning = "Saved reminder settings were invalid. Reminders are off; your account settings were preserved. Check and save reminder choices again.";
             return envelope.Settings;
         }
         catch (JsonException) { throw new ReviewException("Saved settings are corrupt. Re-enter Settings and save."); }
+    }
+    private sealed class SafeReminderConverter : JsonConverter<ReminderConfiguration>
+    {
+        public bool Invalid { get; private set; }
+        public override bool HandleNull => true;
+        public override ReminderConfiguration Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            try
+            {
+                var configuration = document.RootElement.Deserialize<ReminderConfiguration>() ??
+                    throw new ReviewException("Missing reminder settings.");
+                configuration.Validate();
+                return configuration;
+            }
+            catch (Exception ex) when (ex is JsonException or ReviewException)
+            { Invalid = true; return new(); }
+        }
+        public override void Write(Utf8JsonWriter writer, ReminderConfiguration value, JsonSerializerOptions options) =>
+            JsonSerializer.Serialize(writer, value);
     }
     public void Save(ReviewSettings settings)
     {
@@ -54,9 +82,13 @@ public sealed class PrivateDiagnostics(string directory)
     public string DirectoryPath { get; } = directory;
     public static readonly AsyncLocal<Guid?> Cycle = new();
     private static readonly HashSet<string> Events = ["requestStarted", "requestFinished", "refreshStarted", "refreshFinished",
-        "refreshFailed", "refreshCancelled", "startup", "settingsSaved", "actionFailed", "actionFinished", "settingsFailed"];
+        "refreshFailed", "refreshCancelled", "startup", "settingsSaved", "actionFailed", "actionFinished", "settingsFailed",
+        "updateCheckStarted", "updateCheckFinished", "updateCheckFailed", "updateCheckCancelled", "updateCacheInvalidated", "updateCacheFailed",
+        "reviewArchived", "reviewRestored", "archiveChangeFailed", "archiveStateInvalidated", "remindersScheduled",
+        "reminderSchedulingFailed", "reminderAuthorizationFailed", "reminderTestFailed", "reminderTestRequested",
+        "reminderDelivered", "reminderDeliveryFailed", "reminderCallbackFailed", "nativeCallbackFailed", "reminderRegistrationFailed"];
     private static readonly HashSet<string> Operations = ["identity", "followedIdentity", "projects", "reviews",
-        "reviewHistory", "reviewerPolicies", "application", "settings", "copilot", "scout", "edge", "browser", "startup", "shortcut", "diagnostics"];
+        "reviewHistory", "reviewerPolicies", "application", "settings", "copilot", "scout", "edge", "browser", "startup", "shortcut", "diagnostics", "appUpdates", "archives", "reminders"];
     private static readonly HashSet<string> Outcomes = ["success", "httpFailure", "cancelled", "network", "invalidResponse", "system"];
     public void Write(DiagnosticRecord record)
     {
@@ -72,6 +104,8 @@ public sealed class PrivateDiagnostics(string directory)
                 operation = Operations.Contains(record.Operation) ? record.Operation : "unknown",
                 status = record.Status is >= 100 and <= 599 ? record.Status : null,
                 durationMs = record.DurationMs is >= 0 ? record.DurationMs : null,
+                systemCode = record.SystemCode,
+                cliExitCode = record.CliExitCode,
                 outcome = record.Outcome is not null && Outcomes.Contains(record.Outcome) ? record.Outcome : null
             }) + Environment.NewLine;
             if (File.Exists(path) && new FileInfo(path).Length + Encoding.UTF8.GetByteCount(line) > MaxLogFileBytes)
@@ -241,11 +275,15 @@ public static class CommandRunner
             var errorText = await errors;
             var text = await output;
             if (process.ExitCode != 0)
-                throw commandFailure?.Invoke(process.ExitCode, errorText) ??
+            {
+                var failure = commandFailure?.Invoke(process.ExitCode, errorText) ??
                     new ReviewException($"The local command failed (exit {process.ExitCode}). Check the application/sign-in and try again.");
+                failure.CliExitCode = process.ExitCode;
+                throw failure;
+            }
             return text;
         }
-        catch (Win32Exception) { throw new ReviewException("The local application could not be started. Check its installation."); }
+        catch (Win32Exception ex) { throw new ReviewException("The local application could not be started. Check its installation.", ex.NativeErrorCode); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { throw new ReviewException("The local application timed out. Check it before retrying."); }
         finally
@@ -387,6 +425,19 @@ public sealed class WindowsAuthorization(IPatStore patStore) : IAuthorizationPro
 
 public static class ReviewLauncher
 {
+    public static void OpenWeb(Uri url)
+    {
+        if (!url.IsAbsoluteUri || url.Scheme != "https" || url.Host != "github.com" ||
+            !url.IsDefaultPort || url.UserInfo.Length != 0 || url.OriginalString.Any(char.IsControl))
+            throw new ReviewException("This is not a valid GitHub HTTPS link.");
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })
+                ?? throw new ReviewException("The default browser could not be opened. Check Windows default apps.");
+        }
+        catch (Win32Exception) { throw new ReviewException("The default browser could not be opened. Check Windows default apps."); }
+    }
+
     public static Task ScoutAsync(Uri url, string instructions, CancellationToken ct)
     {
         var prompt = ReviewPrompt.Compose(url, instructions);

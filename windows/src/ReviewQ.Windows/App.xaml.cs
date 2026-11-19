@@ -22,6 +22,7 @@ public partial class App : Application
     private bool ownsMutex;
     private Task? activationTask;
     private HttpClient? http;
+    private HttpClient? updateHttp;
     private Forms.NotifyIcon? tray;
     private Icon? trayIcon;
     private Icon? changedTrayIcon;
@@ -39,13 +40,33 @@ public partial class App : Application
     public CancellationToken Lifetime => lifetime.Token;
     public IPatStore PatStore { get; } = new WindowsPatStore();
     public ReviewController Controller { get; private set; } = null!;
+    public UpdateStore? Updates { get; private set; }
+    public ReminderController? Reminders { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Contains("--remove-reminder-registration"))
+        {
+            try { WindowsReminders.RemoveRegistration(); Shutdown(); }
+            catch (Exception ex) when (UiErrors.IsExpected(ex) || ex is System.Runtime.InteropServices.COMException)
+            {
+                new PrivateDiagnostics(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReviewQ", "Logs"))
+                    .Write(DiagnosticRecord.Failure("reminderRegistrationFailed", "reminders", ex));
+                Shutdown(1);
+            }
+            return;
+        }
+        if (e.Args.Contains("--deliver-reminder"))
+        {
+            Shutdown(DeliverReminder());
+            return;
+        }
         var smokeTest = e.Args.Contains("--smoke-test");
+        var reminderOpen = WindowsReminders.IsQueueActivation(e.Args);
         DispatcherUnhandledException += (_, error) =>
         {
+            diagnostics?.Write(DiagnosticRecord.Failure("nativeCallbackFailed", "application", error.Exception));
             MessageBox.Show("ReviewQ encountered an unexpected error and must exit. Your saved settings are retained.",
                 "ReviewQ", MessageBoxButton.OK, MessageBoxImage.Error);
             error.Handled = true;
@@ -63,7 +84,7 @@ public partial class App : Application
                 try
                 {
                     await client.ConnectAsync(5000, Lifetime);
-                    await client.WriteAsync(new byte[] { 1 }, Lifetime);
+                    await client.WriteAsync(new byte[] { reminderOpen ? (byte)2 : (byte)1 }, Lifetime);
                     await client.FlushAsync(Lifetime);
                 }
                 catch (TimeoutException) { throw new ReviewException("ReviewQ is already starting but did not respond. Wait a moment and open it again."); }
@@ -78,13 +99,25 @@ public partial class App : Application
             diagnostics.Write(new("startup", "application"));
             string? loadError = null;
             ReviewSettings settings;
-            try { settings = settingsStore.Load(); }
+            try { settings = settingsStore.Load(); loadError = settingsStore.LoadWarning; }
             catch (Exception ex) when (UiErrors.IsExpected(ex)) { settings = new(); loadError = UiErrors.Message(ex); }
             authorization = new(PatStore);
             http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
                 { Timeout = TimeSpan.FromSeconds(30) };
             Controller = new(settings, new AzureDevOpsClient(http, authorization, Path.Combine(directory, "identity-cache.json"), diagnostics.Write),
-                diagnostics.Write, new ReviewQueueCache(Path.Combine(directory, "queue-cache.json")));
+                diagnostics.Write, new ReviewQueueCache(Path.Combine(directory, "queue-cache.json")),
+                new ArchiveStore(Path.Combine(directory, "archives.json")));
+            if (!smokeTest)
+            {
+                Reminders = new(new WindowsReminders(), diagnostics.Write);
+                Reminders.Apply(settings.Reminders);
+            }
+            updateHttp = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+                { Timeout = TimeSpan.FromSeconds(15) };
+            var version = typeof(App).Assembly.GetName().Version;
+            Updates = new(Path.Combine(directory, "app-updates.json"),
+                version is null ? "" : $"{version.Major}.{version.Minor}.{version.Build}",
+                new GitHubUpdateClient(updateHttp), diagnostics.Write);
             setup = new(settings, new SetupProgressStore(directory),
                 async (draft, pat, ct) =>
                 {
@@ -118,10 +151,14 @@ public partial class App : Application
             SystemEvents.PowerModeChanged += PowerChanged;
             if (loadError is not null) Controller.Report(loadError);
             if (!e.Args.Contains("--startup") || !settings.HasSources || loadError is not null) ShowQueue();
-            if (loadError is null && (setup.IsActive || (!settings.HasSources && !settings.SetupCompleted))) ShowSetup();
-            else if (!settings.HasSources) ShowSettings();
+            if (!reminderOpen)
+            {
+                if (loadError is null && (setup.IsActive || (!settings.HasSources && !settings.SetupCompleted))) ShowSetup();
+                else if (!settings.HasSources) ShowSettings();
+            }
             if (e.Args.Contains("--diagnostics")) ShowDiagnostics();
             Controller.Start();
+            if (!smokeTest) _ = Updates.CheckAsync(ct: Lifetime);
             if (smokeTest)
             {
                 await Task.Delay(1500, Lifetime);
@@ -134,6 +171,31 @@ public partial class App : Application
             Quit(1);
         }
     }
+
+    private static int DeliverReminder()
+    {
+        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReviewQ");
+        var log = new PrivateDiagnostics(Path.Combine(directory, "Logs"));
+        try
+        {
+            var settings = new SettingsStore(directory).Load();
+            if (!settings.Reminders.Enabled) return 0;
+            var native = new WindowsReminders();
+            native.Prepare();
+            if (native.Permission is not (ReminderPermission.Allowed or ReminderPermission.NotInitialized))
+                throw new ReviewException("Windows notification permission is blocked.");
+            native.SendTest(settings.Reminders.PlaysSound);
+            log.Write(new("reminderDelivered", "reminders", Outcome: "success"));
+            return 0;
+        }
+        catch (Exception ex) when (UiErrors.IsExpected(ex) || ex is System.Runtime.InteropServices.COMException)
+        {
+            log.Write(DiagnosticRecord.Failure("reminderDeliveryFailed", "reminders", ex));
+            return 1;
+        }
+    }
+    public void ReportReminderCallbackFailure(Exception error) =>
+        diagnostics?.Write(DiagnosticRecord.Failure("reminderCallbackFailed", "reminders", error));
 
     private async Task ListenAsync(string pipe)
     {
@@ -149,7 +211,12 @@ public partial class App : Application
                 timeout.CancelAfter(TimeSpan.FromSeconds(5));
                 try
                 {
-                    if (await server.ReadAsync(buffer, timeout.Token) > 0) await Dispatcher.InvokeAsync(ShowQueue);
+                    if (await server.ReadAsync(buffer, timeout.Token) > 0)
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            ShowQueue();
+                            if (buffer[0] == 2) _ = Controller.RefreshAsync();
+                        });
                 }
                 catch (OperationCanceledException) when (!Lifetime.IsCancellationRequested)
                 { await Dispatcher.InvokeAsync(() => Controller.Report("Another ReviewQ launch did not finish its activation request. Open the tray icon to show the queue.")); }
@@ -164,7 +231,11 @@ public partial class App : Application
     private void PowerChanged(object sender, PowerModeChangedEventArgs e)
     {
         if (e.Mode == PowerModes.Resume)
-            Dispatcher.InvokeAsync(async () => await Controller.RefreshAsync());
+            Dispatcher.InvokeAsync(async () =>
+            {
+                if (smokeDirectory is null && Updates is not null) _ = Updates.CheckAsync(ct: Lifetime);
+                await Controller.RefreshAsync();
+            });
     }
     public void ShowQueue()
     {
@@ -172,6 +243,7 @@ public partial class App : Application
         queue.Show();
         if (queue.WindowState == WindowState.Minimized) queue.WindowState = WindowState.Normal;
         queue.Activate();
+        if (smokeDirectory is null && Updates is not null) _ = Updates.CheckAsync(ct: Lifetime);
     }
     private void ToggleQueue()
     {
@@ -179,7 +251,13 @@ public partial class App : Application
     }
     public void ShowSettings()
     {
-        if (queue is null) return;
+        if (queue is null)
+        {
+            diagnostics?.Write(new("settingsFailed", "settings", Outcome: "system"));
+            MessageBox.Show("Settings could not be opened because the queue is unavailable. Restart ReviewQ and retry.",
+                "ReviewQ Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
         if (setupWindow is not null) { setupWindow.Activate(); return; }
         if (settingsWindow is null)
         {
@@ -259,6 +337,7 @@ public partial class App : Application
         }
         authorization!.Invalidate();
         await Controller.ApplyAsync(settings, verifiedSnapshot: verifiedSnapshot);
+        Reminders?.Apply(settings.Reminders, true);
         try { diagnostics!.Write(new("settingsSaved", "settings")); }
         catch (Exception ex) when (UiErrors.IsExpected(ex)) { Controller.Report("Settings were saved, but diagnostic logging failed. " + UiErrors.Message(ex)); }
     }
@@ -277,16 +356,17 @@ public partial class App : Application
         var reviewLaunch = operation is "copilot" or "scout";
         if (launching && reviewLaunch) { Controller.Report("A review launch is already in progress. Wait for it to finish."); return; }
         if (reviewLaunch) launching = true;
+        var elapsed = Stopwatch.StartNew();
         try
         {
             await action();
-            diagnostics!.Write(new("actionFinished", operation, Outcome: "success"));
+            diagnostics!.Write(new("actionFinished", operation, DurationMs: elapsed.ElapsedMilliseconds, Outcome: "success"));
         }
         catch (OperationCanceledException) when (Lifetime.IsCancellationRequested) { }
         catch (Exception ex) when (UiErrors.IsExpected(ex))
         {
             Controller.Report(UiErrors.Message(ex));
-            diagnostics!.Write(new("actionFailed", operation, Outcome: "system"));
+            diagnostics!.Write(DiagnosticRecord.Failure("actionFailed", operation, ex, elapsed.ElapsedMilliseconds));
             ShowQueue();
         }
         finally { if (reviewLaunch) launching = false; }
@@ -295,7 +375,7 @@ public partial class App : Application
     {
         if (tray is null || queue is null) return;
         var text = Controller.Error is not null ? "ReviewQ - error; open queue" : Controller.Snapshot is { } snapshot ?
-            $"ReviewQ - {snapshot.PendingCount} pending reviews" : "ReviewQ - waiting for refresh";
+            $"ReviewQ - {Controller.PendingCount} pending reviews" : "ReviewQ - waiting for refresh";
         if (Controller.Changes.HasChanges && Controller.Error is null) text += " - changed since refresh";
         tray.Text = text[..Math.Min(text.Length, 63)];
         tray.Icon = Controller.Changes.HasChanges ? changedTrayIcon : trayIcon;
@@ -303,7 +383,7 @@ public partial class App : Application
         queue.TaskbarItemInfo.ProgressState = Controller.Error is not null ? TaskbarItemProgressState.Error :
             Controller.IsRefreshing ? TaskbarItemProgressState.Indeterminate : TaskbarItemProgressState.None;
         queue.TaskbarItemInfo.ProgressValue = Controller.Error is not null ? 1 : 0;
-        var count = Controller.Snapshot?.PendingCount ?? 0;
+        var count = Controller.PendingCount;
         var label = Controller.Error is not null ? "!" : count > 99 ? "99+" : count.ToString(CultureInfo.InvariantCulture);
         if (!Controller.Settings.ShowCount && Controller.Error is null && !Controller.Changes.HasChanges)
         { queue.TaskbarItemInfo.Overlay = null; return; }
@@ -359,6 +439,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         http?.Dispose();
+        updateHttp?.Dispose();
         if (ownsMutex) { instance?.ReleaseMutex(); ownsMutex = false; }
         instance?.Dispose();
         lifetime.Dispose();

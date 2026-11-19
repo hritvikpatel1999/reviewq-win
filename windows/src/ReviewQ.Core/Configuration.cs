@@ -4,7 +4,11 @@ using System.Text.RegularExpressions;
 
 namespace ReviewQ.Core;
 
-public sealed class ReviewException(string message) : Exception(message);
+public sealed class ReviewException(string message, int? systemCode = null, int? cliExitCode = null) : Exception(message)
+{
+    public int? SystemCode { get; } = systemCode;
+    public int? CliExitCode { get; set; } = cliExitCode;
+}
 public enum AuthenticationMethod { AzureCli, PersonalAccessToken }
 public sealed record ReviewSettings
 {
@@ -23,6 +27,7 @@ public sealed record ReviewSettings
     public string GlobalShortcut { get; set; } = "Ctrl+Alt+Q";
     public bool FirstCloseShown { get; set; }
     public bool SetupCompleted { get; set; }
+    public ReminderConfiguration Reminders { get; set; } = new();
     public bool HasSources => !string.IsNullOrWhiteSpace(SourceUrls);
     public IReadOnlyList<ReviewSource> Sources()
     {
@@ -45,7 +50,7 @@ public sealed record ReviewSettings
     public void Validate(bool requireSources = true)
     {
         if (SourceUrls is null || TenantId is null || FollowedAuthorEmails is null ||
-            ScoutAdditionalInstructions is null || CopilotAdditionalInstructions is null || GlobalShortcut is null)
+            ScoutAdditionalInstructions is null || CopilotAdditionalInstructions is null || GlobalShortcut is null || Reminders is null)
             throw new ReviewException("Saved settings contain missing values. Re-enter settings.");
         if (!Enum.IsDefined(Authentication)) throw new ReviewException("Choose a supported authentication method.");
         if (requireSources && !HasSources) throw new ReviewException("Add at least one Azure DevOps organization or project URL.");
@@ -53,6 +58,7 @@ public sealed record ReviewSettings
         _ = FollowedEmails();
         ReviewPrompt.Validate(ScoutAdditionalInstructions);
         ReviewPrompt.Validate(CopilotAdditionalInstructions);
+        Reminders.Validate();
         if (RefreshMinutes is not (1 or 5 or 15 or 30)) throw new ReviewException("Refresh must be 1, 5, 15, or 30 minutes.");
         var tenant = TenantId.Trim();
         if (Authentication == AuthenticationMethod.AzureCli && tenant.Length > 0 &&

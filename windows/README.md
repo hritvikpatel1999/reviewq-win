@@ -13,9 +13,12 @@ Use the package matching **Settings > System > About > System type**:
 
 | CPU | Portable package | Per-user installer |
 |---|---|---|
-| x86 compatibility (32-bit process) | `ReviewQ-3.2.0-win-x86.zip` | `ReviewQ-3.2.0-win-x86-setup.exe` |
-| Intel/AMD x64 | `ReviewQ-3.2.0-win-x64.zip` | `ReviewQ-3.2.0-win-x64-setup.exe` |
-| Windows on ARM | `ReviewQ-3.2.0-win-arm64.zip` | `ReviewQ-3.2.0-win-arm64-setup.exe` |
+| x86 compatibility (32-bit process) | `ReviewQ-4.0.0-win-x86.zip` | `ReviewQ-4.0.0-win-x86-setup.exe` |
+| Intel/AMD x64 | `ReviewQ-4.0.0-win-x64.zip` | `ReviewQ-4.0.0-win-x64-setup.exe` |
+| Windows on ARM | `ReviewQ-4.0.0-win-arm64.zip` | `ReviewQ-4.0.0-win-arm64-setup.exe` |
+
+Download packages and checksums from the
+[v4.0.0 Windows release](https://github.com/hritvikpatel1999/reviewq-win/releases/tag/v4.0.0).
 
 Build outputs are in `dist\windows` relative to the repository root.
 For portable use, extract **the entire ZIP** into a permanent folder and open
@@ -31,6 +34,7 @@ Verify provenance and compare `Get-FileHash -Algorithm SHA256 <package>` against
 `SHA256SUMS.txt`; a matching checksum is not a publisher signature.
 Publisher signing and reputation require the owner's signing identity/service.
 There is no auto-updater or Microsoft Store package.
+Update notifications are available, but all installation remains manual.
 
 ## Visibility and background behavior
 
@@ -47,6 +51,9 @@ There is no auto-updater or Microsoft Store package.
   app or startup error still opens the window.
 - Reopening the app activates the existing per-user instance.
 - Queue, Setup, Settings, and Diagnostics all follow the Windows light/dark theme.
+- The queue header follows the Mac layout: **Setup, Refresh, Settings, Quit**.
+  Right-click Settings for Diagnostics, or use the tray menu. The footer has
+  a live update age and a link to the creator's GitHub profile.
 - A pending count appears in the title/tray tooltip; a taskbar overlay indicates
   count or errors where Windows supports it. Only assigned reviews count.
 - Green tray/taskbar, section, and PR dots show changes since the previous
@@ -74,10 +81,120 @@ Successful connection checks show a green tick beside the confirmation text
 
 Closing setup preserves non-secret choices and progress, but clears an unsaved
 PAT and connection verification. Resume requires a fresh check. Existing
-configured users skip automatic setup. **Run Setup** on the right of the queue footer or in the tray
+configured users skip automatic setup. **Setup** in the queue header or **Run Setup** in the tray
 replays it; **Keep existing settings** discards the draft without changing saved
 preferences. Save/close any Settings editor before replaying setup.
 The compact footer shows the update age on the left without a tray-help paragraph.
+
+Settings uses the Mac-inspired grouped-card layout: review sources and segmented
+CLI/PAT authentication first, followed by optional queues, per-assistant review
+instructions with character counts, review-queue preferences, reminders, startup,
+caches, and app updates. Only the selected authentication fields are shown;
+switching methods retains the unsaved draft. The scrolling body has a fixed
+footer with **Diagnostics** on the left and **Save and Refresh** on the right.
+Reminder weekdays use compact selectable chips, with labeled time rows and a
+live reminders-per-day count. Platform-specific setup/retry actions remain under
+**Windows notification options**; errors and saved-schedule status stay visible.
+When **Enable review reminders** is unchecked, the other reminder controls stay
+visible but greyed out and disabled, including test/notification options.
+Checking it re-enables them without clearing the selected days, times, or sound.
+Enabling the draft still does not apply a schedule until you save.
+
+## App update notifications
+
+ReviewQ checks the public **reviewq-win** latest stable release on launch, resume,
+or queue opening when due (normally once per 24 hours). This is separate from
+Azure DevOps authentication and queue refreshes; no PAT, CLI token, PR data, or
+review instructions are sent to GitHub. Smoke tests skip all app-update requests.
+
+Newer versions show a compact **View Updates** banner beneath the header.
+Dismiss hides that version only; a later version appears again. **Settings >
+App updates** shows the installed version, last successful check, available
+release, errors, and **Check for Updates**. A dismissed release remains available
+there. The link opens the exact official Windows release page in your default
+browser; it never downloads or starts an installer. Choose the correct CPU
+package, verify the checksums, and install it yourself.
+
+Stable versions are compared numerically; drafts and prereleases are not offered.
+Conditional ETag requests reuse validated cached results. Network or server
+errors preserve the last known release and successful-check time, with automatic
+retry delays from 15 minutes up to one day. Manual checks bypass normal scheduling,
+but respect GitHub rate-limit/Retry-After cooldowns. Only one check runs at a time.
+Invalid saved update information is cleared with an explicit error. The bounded,
+atomic local update cache contains public release metadata, scheduling, and your
+dismissed version, never Azure DevOps credentials; it is not exported in logs.
+
+## Local PR archives and scheduled reminders
+
+The Windows v4 source ports the archive/reminder features from macOS
+[v4.0.0](https://github.com/hritvikpatel1999/reviewq/releases/tag/v4.0.0),
+pinned to commit `d02408b7ee1047520ac0de20c8fa1a6514b475e9`.
+
+### Archives
+
+Every active PR has a white-backed blue folder **Archive** action, including
+followed and authored PRs. Archiving is local and reversible, never an Azure
+DevOps change or additional request. It immediately removes the PR from active
+sections, assigned-review counts, and both sides of refresh-change comparisons.
+The raw queue/cache remains intact. Restoring can reveal a genuine change from
+the preceding successful network refresh.
+
+The bottom **Archives** section starts collapsed, remains reachable when all
+PRs are archived, and shows current snapshot metadata newest-first with repository
+context, **Restore**, and a generic browser action. It has no AI actions.
+Authored active cards retain the explicit Edge shortcut.
+
+Only canonical PR IDs are saved, under the authenticated account/source scope,
+with a global limit of 4,096 IDs and 512 KiB. Choices survive absent/reappearing
+PRs and are separate between scopes. This is not a historical archive: PRs no
+longer returned by the configured sources/filters are not displayed. Corrupt
+state is cleared with an explicit error; failed writes or full storage do not
+silently hide PRs.
+
+### Review reminders
+
+Setup Preferences and Settings share controls for enabling reminders, weekdays,
+up to eight distinct local 24-hour times per day, and optional sound. Suggested
+defaults are Monday-Friday at **10:30 and 15:30**, disabled with sound off.
+The number of time rows is the reminders-per-day count.
+
+**Set up / check notifications** registers ReviewQ with Windows and reports
+permission status. **Send test reminder** requests one immediate generic
+notification using the draft sound choice, without enabling or saving a schedule.
+On first use Windows may report **NotInitialized** until that first notification
+creates its per-app profile; this is shown distinctly from blocked permission.
+**Windows notification settings** opens the system controls. Permission actions
+do not save drafts. Only **Save and Refresh** or **Open my queue** commits the
+schedule. Reminder edits do not invalidate a verified Azure DevOps queue.
+**Retry saved schedule** retries saved choices, not unsaved edits.
+
+Windows uses one per-user Task Scheduler task, `ReviewQ-Reminders-<user SID>`,
+with weekly calendar triggers. It runs without stored credentials or elevation.
+Its `--deliver-reminder` action reads saved reminder choices and sends only:
+
+> Review reminder  
+> Take a moment to check your ReviewQ.
+
+This delivery mode does not initialize authentication, fetch PRs, or check app
+updates. Protocol activation, `reviewq-reminder:queue`, opens/focuses the queue
+rather than toggling it or routing a cold launch to Setup/Settings. Normal queue
+opening then uses the existing refresh/cache path.
+
+Quitting ReviewQ does **not** disable saved reminders. Disable reminders and save
+to remove the task, including before rolling back to a version without reminders.
+Windows must remain signed in and awake; the task neither wakes the PC nor
+delivers a backlog of missed reminders. Focus/Do Not Disturb, system permissions,
+and notification/sound settings control actual display and sound.
+
+The app's Start menu shortcut carries the Windows notification identity; a
+per-user protocol handler supports cold activation. Moving a portable app
+requires checking notifications and re-saving the enabled schedule to update
+paths. Portable users should disable/save reminders, then run
+`.\ReviewQ.exe --remove-reminder-registration` before deleting the app.
+The installer removes its own task/protocol registration on uninstall, preserving
+registrations pointing to a different installation. Saved choices remain for
+reinstall; invalid reminder choices disable only reminders with a visible warning,
+preserving account settings.
 
 ## Configure Azure DevOps
 
@@ -195,14 +312,19 @@ control labels (`New chat`, `Message`, `Send`) are required.
 - `identity-cache.json`: scoped identity IDs and timestamps (no access tokens).
 - `setup-identity-cache.json`: identity IDs scoped to setup verification.
 - `queue-cache.json`: unencrypted, bounded PR display data for authenticated startup.
+- `archives.json`: bounded, account/source-scoped canonical PR IDs only.
+- `app-updates.json`: public Windows release metadata, ETag, check/retry times, and dismissed version (at most 32 KiB).
 - `setup-progress.json`: non-secret setup draft/progress, never PATs or verification.
 - `Logs\reviewq.log` and up to three rotated 1 MiB backups.
 
-Diagnostics contains allowlisted event/category/status/timing fields, never
+Diagnostics contains allowlisted event/category/status/timing fields and safe
+numeric native-system/CLI exit codes, never raw native exception descriptions,
 credentials, URLs, titles, discussion text, prompts, or settings. Verbose logging
 is opt-in for the current process only. Exports include only these logs and
 version/OS/architecture metadata. Inspect any ZIP before sharing it.
-Queue caches and setup progress are never exported.
+Queue caches, archives, reminder choices, and setup progress are never exported.
+Reminder authorization, scheduling, test, delivery, and callback failures have
+separate categories; failure logging does not require verbose mode.
 
 The startup queue cache contains titles, authors, repository/project names,
 links, badges, timestamps, compact change fingerprints, and hashed scopes.
@@ -235,8 +357,9 @@ Icon-only Edge/Copilot/Scout actions have accessible names and tooltips. Their
 or shifting nearby text. Scout and Copilot open new review chats; authored PRs keep browser-only
 actions.
 
-Uninstall through Windows Installed apps. The installer removes its own startup
-registration but **retains settings, caches, setup progress, logs, and the PAT**, so
+Uninstall through Windows Installed apps. The installer removes its own startup,
+reminder-task, and reminder-protocol registrations but **retains settings, archives,
+caches, setup progress, logs, and the PAT**, so
 reinstallation does not discard account configuration. To remove personal data,
 first remove the PAT in Settings, quit ReviewQ, then delete the specific
 `%LOCALAPPDATA%\ReviewQ` folder yourself. Portable users should disable startup
@@ -304,6 +427,22 @@ keyboard/screen-reader, light/high-contrast, reduced-motion, DPI/multi-monitor,
 Explorer restart, wake, startup, and install-upgrade acceptance. CI definitions
 alone are not evidence that CI ran.
 
+The local v4 parity build passed **248 tests** (146 core, 102 Windows), including
+explicitly enabled real Task Scheduler registration/removal. Native light/dark
+UI checks cover Archive/Restore, all-archived reachability, reminder controls,
+and draft preservation. All three architectures were packaged; final x86/x64
+startup smoke tests and all six SHA-256 checks passed. ARM64 was cross-built,
+not executed locally. See the [v4 release notes](../docs/windows-release-v4.0.0.md)
+and the release commit's workflow results for native CI verification.
+
+Installed x64 acceptance verified a real generic test-notification request
+(Windows subsequently reported Allowed), notification shortcut identity,
+warm/cold protocol queue activation, one coalesced warm refresh, preservation
+of an open Settings draft, and unchanged saved preferences with reminders off.
+The actual v4 uninstaller removed its owned task/protocol and retained settings;
+the same build was reinstalled. These checks do not prove a banner was visible,
+that a clock-triggered reminder fired, or time-zone/DST/sleep/Focus behavior.
+
 Before distribution:
 
 1. Run the workflow on both native architectures and inspect uploaded packages.
@@ -314,7 +453,10 @@ Before distribution:
    opt-in startup, resume, and Explorer tray restoration.
 5. Test keyboard navigation and Narrator; light/dark/high-contrast; 100-200% DPI,
    different monitors/taskbar positions, long titles, and reduced motion.
-6. Install, upgrade, and uninstall each architecture without losing settings or
-   affecting unrelated startup entries; sign packages using the owner identity.
+6. Exercise real reminder registration, test display, warm/cold notification
+   activation, permission denial, time-zone/DST behavior, and opt-out; do not
+   interpret a successful toast API call as proof a banner appeared.
+7. Install, upgrade, and uninstall each architecture without losing settings or
+   affecting unrelated startup/task/protocol entries; sign packages using the owner identity.
 
 Do not interpret a cross-published ARM64 executable as a native ARM64 runtime test.

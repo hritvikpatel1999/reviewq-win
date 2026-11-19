@@ -14,14 +14,16 @@ the Windows build. See [original project documentation](README.macos.md).
 
 Get packages from [Releases](https://github.com/hritvikpatel1999/reviewq-win/releases).
 This repository and its published releases are public.
+The current release is [**4.0.0**](https://github.com/hritvikpatel1999/reviewq-win/releases/tag/v4.0.0).
+See the [release notes](docs/windows-release-v4.0.0.md) for changes and verification details.
 
 Requires **Windows 11 22H2 or newer**. Choose the appropriate architecture:
 
 | Package | Recommended use |
 |---|---|
-| `ReviewQ-3.2.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
-| `ReviewQ-3.2.0-win-arm64-setup.exe` | Windows on ARM |
-| `ReviewQ-3.2.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
+| `ReviewQ-4.0.0-win-x64-setup.exe` | Intel/AMD Windows 11 PCs |
+| `ReviewQ-4.0.0-win-arm64-setup.exe` | Windows on ARM |
+| `ReviewQ-4.0.0-win-x86-setup.exe` | 32-bit process compatibility on supported Windows |
 
 Matching portable ZIPs are also provided. Extract the **entire ZIP** before
 opening `ReviewQ.exe`; no separate .NET runtime is required.
@@ -29,7 +31,8 @@ opening `ReviewQ.exe`; no separate .NET runtime is required.
 Installers run per-user without administrator privileges. Packages are currently
 **unsigned**, so Windows SmartScreen may warn. Compare the package's SHA-256 hash
 against the release's `SHA256SUMS.txt`; checksums are not publisher signatures.
-There is no auto-updater. Windows 11 does not have a supported 32-bit x86 OS
+App update notifications link to official Windows releases; installation stays
+manual (no automatic downloads or installer execution). Windows 11 does not have a supported 32-bit x86 OS
 edition; the x86 package is a compatibility build, not support for legacy Windows.
 
 ## Features
@@ -53,7 +56,23 @@ edition; the x86 package is a compatibility build, not support for legacy Window
 - Green tray, section, and PR dots for changes since the previous successful
   refresh (not unread state).
 - Six-screen resumable setup with explicit read-only connection verification.
-  Use **Run Setup** in the queue footer or tray menu to replay it.
+  Use **Setup** in the queue header or **Run Setup** in the tray menu to replay it.
+- Mac-aligned header actions: **Setup, Refresh, Settings, Quit**, with update age
+  and creator credit in the footer. Diagnostics remains in the tray menu and the
+  Settings button's context menu.
+- Daily cached public Windows-release checks, a per-version dismissible
+  **View Updates** banner, and manual checking in **Settings > App updates**.
+  Conditional requests, retry backoff, and server cooldowns keep checks lightweight.
+- Reversible, local **Archive / Restore** actions across all queues, with
+  white-backed blue folder icons and a collapsed **Archives** section. Archived
+  PRs do not contribute to active lists, pending counts, or active change dots.
+- Opt-in weekly **Review reminders** in Setup and Settings: selected weekdays,
+  up to eight local times daily, optional sound, permission/status controls, and
+  an immediate test. Defaults are weekdays at 10:30 and 15:30, disabled and silent.
+  Windows can deliver saved reminders while the app is closed, without fetching
+  or revealing PR data. Clicking one opens the queue.
+- Private failure diagnostics include reminder stages, safe numeric native/CLI
+  error codes, and assistant-action timings, never raw exception descriptions.
 
 ReviewQ **reads** Azure DevOps. It does not vote, comment, merge, or modify PRs.
 GitHub PR integration is not included. Scout review handoff uses Windows
@@ -144,7 +163,17 @@ to 2 MiB and 4,096 PRs. Oversized queues are not partially cached. Saving Settin
 or removing the PAT clears the prior cache; Settings also offers manual clearing.
 Neither this cache nor setup progress is included in diagnostic exports.
 
-Read the [3.2.0 release notes](docs/windows-release-v3.2.0.md) and
+Archives save only scoped canonical PR IDs, not copied PR content. The Archives
+section is not historical storage: only PRs in the current snapshot appear.
+Reminder choices stay local in settings; Windows Task Scheduler holds one
+per-user weekly task. Reminders require a signed-in, awake Windows session;
+Focus/Do Not Disturb may suppress display or sound. Quitting leaves the saved
+schedule active; disable and save to stop it. Uninstall removes registrations
+owned by that installation and retains preferences for reinstall. See the
+[Windows guide](windows/README.md#local-pr-archives-and-scheduled-reminders).
+
+Read the [4.0.0 release notes](docs/windows-release-v4.0.0.md), or the historical
+[3.2.0 release notes](docs/windows-release-v3.2.0.md) and
 [3.1.0 parity details](docs/windows-release-v3.1.0.md).
 Exhaustive accessibility/high-contrast/DPI acceptance remains to be verified.
 A **Merge Ready** label is not a guarantee of build,

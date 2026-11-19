@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using ReviewQ.Core;
 
 namespace ReviewQ.Windows;
@@ -11,32 +12,54 @@ public partial class MainWindow : Window
 {
     private readonly App app;
     private readonly ReviewController controller;
+    private readonly UpdateStore? updates;
+    private readonly ReminderController? reminders;
+    private readonly DispatcherTimer ageTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Dictionary<string, bool> collapsed = new();
     private ReviewSnapshot? rendered;
     private ReviewChanges? renderedChanges;
-    public MainWindow(App app, ReviewController controller)
+    public MainWindow(App app, ReviewController controller, UpdateStore? updates = null)
     {
         InitializeComponent();
         this.app = app;
         this.controller = controller;
+        this.updates = updates ?? app.Updates;
+        reminders = app.Reminders;
+        AppSymbol.Content = UiIcons.Create("app", 28, true);
+        RefreshButton.Content = UiIcons.Create("refresh", 18);
+        SettingsButton.Content = UiIcons.Create("settings", 18);
+        QuitButton.Content = UiIcons.Create("power", 18);
         controller.PropertyChanged += Updated;
+        if (this.updates is not null) this.updates.Changed += RenderUpdates;
+        if (reminders is not null) reminders.Changed += Render;
+        ageTimer.Tick += (_, _) => RenderAge();
+        IsVisibleChanged += (_, _) => { if (IsVisible) { RenderAge(); ageTimer.Start(); } else ageTimer.Stop(); };
+        Closed += (_, _) =>
+        {
+            ageTimer.Stop();
+            controller.PropertyChanged -= Updated;
+            if (this.updates is not null) this.updates.Changed -= RenderUpdates;
+            if (reminders is not null) reminders.Changed -= Render;
+        };
         Closing += OnClosing;
+        RenderUpdates();
         Render();
     }
     private void Updated(object? sender, PropertyChangedEventArgs e) => Render();
     private void Render()
     {
         var snapshot = controller.Snapshot;
-        Title = controller.Settings.ShowCount && snapshot is not null ? $"ReviewQ - {snapshot.PendingCount} pending" : "ReviewQ";
+        Title = controller.Settings.ShowCount && snapshot is not null ? $"ReviewQ - {controller.PendingCount} pending" : "ReviewQ";
         StatusText.Text = controller.IsRefreshing ? "Refreshing..." :
-            snapshot is not null ? $"{snapshot.PendingCount} pending reviews - updated {snapshot.FetchedAt.LocalDateTime:t}" :
+            snapshot is not null ? $"{controller.PendingCount} pending reviews" :
             controller.Settings.HasSources ? "Refresh to load your review queue." : "Welcome! Open Settings to add your Azure DevOps sources and sign-in method.";
-        UpdatedText.Text = snapshot is null ? "Not updated yet" :
-            $"Updated {Age(DateTimeOffset.UtcNow - snapshot.FetchedAt)} ago" + (controller.IsCached ? " - cached queue" : "");
-        UpdatedText.ToolTip = snapshot is null ? null : $"Last successful update: {snapshot.FetchedAt.LocalDateTime:g}";
-        ErrorPanel.Visibility = controller.Error is null && controller.CacheWarning is null ? Visibility.Collapsed : Visibility.Visible;
+        RefreshButton.IsEnabled = !controller.IsRefreshing && controller.Settings.HasSources;
+        RefreshButton.ToolTip = controller.IsRefreshing ? "Refreshing reviews..." : "Refresh reviews";
+        RenderAge();
+        ErrorPanel.Visibility = controller.Error is null && controller.CacheWarning is null && controller.ArchiveError is null &&
+            reminders?.Error is null ? Visibility.Collapsed : Visibility.Visible;
         ErrorText.Text = (snapshot is not null && controller.Error is not null ? "Showing the last successful queue. " : "") +
-            controller.Error + (controller.Error is not null && controller.CacheWarning is not null ? "\n" : "") + controller.CacheWarning;
+            string.Join("\n", new[] { controller.Error, controller.CacheWarning, controller.ArchiveError, reminders?.Error }.Where(x => x is not null));
         if (ReferenceEquals(rendered, snapshot) && ReferenceEquals(renderedChanges, controller.Changes) && QueuePanel.Children.Count > 0) return;
         rendered = snapshot;
         renderedChanges = controller.Changes;
@@ -48,7 +71,7 @@ public partial class MainWindow : Window
         }
         foreach (var queue in new[] { QueueKind.Assigned, QueueKind.Followed, QueueKind.Authored })
         {
-            var items = snapshot.Items.Where(x => x.Queue == queue).ToList();
+            var items = controller.ActiveItems.Where(x => x.Queue == queue).ToList();
             if (items.Count == 0) continue;
             var content = new StackPanel();
             if (queue == QueueKind.Assigned)
@@ -69,6 +92,13 @@ public partial class MainWindow : Window
                 GroupHeader(queue == QueueKind.Followed ? "people" : "author", title, null, items.Count,
                     queue == QueueKind.Followed ? controller.Changes.Followed : controller.Changes.Authored), content, title));
         }
+        var archived = controller.ArchivedItems;
+        if (archived.Count > 0)
+        {
+            var cards = new StackPanel();
+            foreach (var item in archived) cards.Children.Add(Card(item, true));
+            QueuePanel.Children.Add(Expandable("Archives", GroupHeader("archive", "Archives", null, archived.Count), cards, "Archives", true));
+        }
     }
     private static UIElement GroupHeader(string icon, string title, string? subtitle, int count, bool changed = false)
     {
@@ -80,7 +110,15 @@ public partial class MainWindow : Window
         symbol.Margin = new(0, 0, 14, 0);
         grid.Children.Add(symbol);
         var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        labels.Children.Add(new TextBlock { Text = title, FontSize = 15, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+        var titleRow = new DockPanel { LastChildFill = false };
+        titleRow.Children.Add(new TextBlock { Text = title, FontSize = 16, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+        if (changed)
+        {
+            var dot = ChangeDot("Section changed since the previous successful refresh");
+            dot.Margin = new(10, 0, 0, 0);
+            titleRow.Children.Add(dot);
+        }
+        labels.Children.Add(titleRow);
         if (subtitle is not null) labels.Children.Add(new TextBlock { Text = subtitle, Opacity = 0.6, FontSize = 12, Margin = new(0, 3, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis });
         Grid.SetColumn(labels, 1); grid.Children.Add(labels);
         var badge = new Border
@@ -89,18 +127,15 @@ public partial class MainWindow : Window
             MinWidth = 28, Padding = new(8, 3, 8, 3), Margin = new(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock { Text = count.ToString(), FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center }
         };
+        if (!SystemParameters.HighContrast)
+            ((TextBlock)badge.Child).Foreground = Brushes.DodgerBlue;
+        else badge.SetResourceReference(Border.BackgroundProperty, SystemColors.ControlBrushKey);
         Grid.SetColumn(badge, 2); grid.Children.Add(badge);
-        if (changed)
-        {
-            var dot = ChangeDot("Section changed since the previous successful refresh");
-            dot.HorizontalAlignment = HorizontalAlignment.Right; dot.VerticalAlignment = VerticalAlignment.Top;
-            grid.Children.Add(dot);
-        }
         return grid;
     }
-    private Expander Expandable(string key, UIElement heading, UIElement content, string description)
+    private Expander Expandable(string key, UIElement heading, UIElement content, string description, bool initiallyCollapsed = false)
     {
-        var expander = new Expander { Header = heading, Content = content, IsExpanded = !collapsed.GetValueOrDefault(key), Margin = new(0, 5, 0, 9) };
+        var expander = new Expander { Header = heading, Content = content, IsExpanded = !collapsed.GetValueOrDefault(key, initiallyCollapsed), Margin = new(0, 5, 0, 9) };
         expander.SetResourceReference(StyleProperty, "ReviewGroupExpander");
         AutomationProperties.SetName(expander, description);
         expander.ToolTip = description;
@@ -108,7 +143,7 @@ public partial class MainWindow : Window
         expander.Collapsed += (_, e) => { if (ReferenceEquals(e.Source, expander)) collapsed[key] = true; };
         return expander;
     }
-    private UIElement Card(ReviewItem item)
+    private UIElement Card(ReviewItem item, bool archived = false)
     {
         var panel = new StackPanel { Margin = new(30, 8, 5, 18) };
         var top = new Grid();
@@ -124,10 +159,13 @@ public partial class MainWindow : Window
             stageRow.Children.Add(ChangeDot("Pull request is new or changed since the previous successful refresh"));
         stageRow.Children.Add(stage); top.Children.Add(stageRow);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var edge = ActionButton("edge", "Open in Microsoft Edge");
-        edge.Click += async (_, _) => await app.RunActionAsync("edge", () => { ReviewLauncher.Browser(item.Url, true); return Task.CompletedTask; });
+        var archive = ActionButton(archived ? "restore" : "archive", archived ? "Restore pull request" : "Archive pull request");
+        archive.Click += (_, e) => { e.Handled = true; controller.SetArchived(item, !archived); };
+        actions.Children.Add(archive);
+        var edge = ActionButton(archived ? "browser" : "edge", archived ? "Open in default browser" : "Open in Microsoft Edge");
+        edge.Click += async (_, _) => await app.RunActionAsync(archived ? "browser" : "edge", () => { ReviewLauncher.Browser(item.Url, !archived); return Task.CompletedTask; });
         actions.Children.Add(edge);
-        if (item.Queue != QueueKind.Authored)
+        if (!archived && item.Queue != QueueKind.Authored)
         {
             var scout = ActionButton("scout", "Start a new Scout review chat");
             scout.Click += async (_, _) => await app.RunActionAsync("scout",
@@ -150,7 +188,7 @@ public partial class MainWindow : Window
         var metadata = new Grid();
         metadata.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         metadata.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        metadata.Children.Add(new TextBlock { Text = item.Author + (item.Queue == QueueKind.Assigned ? "" : $" in {item.Repository}") +
+        metadata.Children.Add(new TextBlock { Text = item.Author + (item.Queue == QueueKind.Assigned && !archived ? "" : $" in {item.Repository}") +
             (item.IsDraft ? " - Draft" : "") + (item.IsRequired ? " - Required" : ""),
             TextWrapping = TextWrapping.Wrap, Opacity = 0.6, FontSize = 12, Margin = new(0, 0, 10, 0) });
         var ageText = new TextBlock { Text = ageLabel, Opacity = 0.6, FontSize = 12, ToolTip = $"Created {item.CreatedAt.LocalDateTime:g}" };
@@ -174,10 +212,45 @@ public partial class MainWindow : Window
     }
     private static string Age(TimeSpan age) => age.TotalDays >= 1 ? $"{(int)age.TotalDays}d" :
         age.TotalHours >= 1 ? $"{(int)age.TotalHours}h" : age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes}m" : "a few seconds";
+    private void RenderAge()
+    {
+        var snapshot = controller.Snapshot;
+        var age = snapshot is null ? TimeSpan.Zero : DateTimeOffset.UtcNow - snapshot.FetchedAt;
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        var elapsed = age.TotalHours >= 1 ? Age(age) :
+            age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes} min, {age.Seconds} sec" : $"{age.Seconds} sec";
+        UpdatedText.Text = snapshot is null ? "Not updated yet" :
+            $"{(controller.Error is null ? "Updated" : "Last successful update")} {elapsed} ago" +
+            (controller.IsCached ? " - cached queue" : "");
+        UpdatedText.ToolTip = snapshot is null ? null : $"Last successful update: {snapshot.FetchedAt.LocalDateTime:g}";
+    }
+    private void RenderUpdates()
+    {
+        UpdateBanner.Visibility = updates?.BannerUpdate is null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateText.Text = updates?.BannerUpdate is { } release ? $"ReviewQ v{release.Version} is out" : "";
+        if (SystemParameters.HighContrast) UpdateBanner.SetResourceReference(BackgroundProperty, SystemColors.ControlBrushKey);
+    }
+    private void DismissUpdateClick(object sender, RoutedEventArgs e) => updates?.DismissUpdate();
+    private async void ViewUpdatesClick(object sender, RoutedEventArgs e)
+    {
+        if (updates?.AvailableUpdate is { } release)
+            await app.RunActionAsync("browser", () =>
+            {
+                ReviewLauncher.OpenWeb(release.ReleaseUrl);
+                return Task.CompletedTask;
+            });
+    }
+    private async void CreatorClick(object sender, RoutedEventArgs e) =>
+        await app.RunActionAsync("browser", () =>
+        {
+            ReviewLauncher.OpenWeb(new Uri("https://github.com/hritvikpatel1999"));
+            return Task.CompletedTask;
+        });
     private async void RefreshClick(object sender, RoutedEventArgs e) => await controller.RefreshAsync();
     private void SettingsClick(object sender, RoutedEventArgs e) => app.ShowSettings();
     private void DiagnosticsClick(object sender, RoutedEventArgs e) => app.ShowDiagnostics();
     private void SetupClick(object sender, RoutedEventArgs e) => app.ShowSetup();
+    private void QuitClick(object sender, RoutedEventArgs e) => app.Quit();
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (app.IsQuitting) return;
